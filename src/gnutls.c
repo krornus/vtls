@@ -173,6 +173,7 @@ static ssize_t vtls_push(void *s, const void *buf, size_t len)
 	if (ret < 0)
 		gnutls_transport_set_global_errno(gtls_mapped_sockerrno());
 #endif
+	printf("[%d] w len=%zd ret=%zd\n",GNUTLS_POINTER_TO_INT_CAST(s), len, ret);
 	return ret;
 }
 
@@ -183,6 +184,7 @@ static ssize_t vtls_pull(void *s, void *buf, size_t len)
 	if (ret < 0)
 		gnutls_transport_set_global_errno(gtls_mapped_sockerrno());
 #endif
+	printf("[%d] r len=%zd ret=%zd\n",GNUTLS_POINTER_TO_INT_CAST(s), len, ret);
 	return ret;
 }
 
@@ -293,12 +295,9 @@ static void unload_file(gnutls_datum_t data)
 }
 
 /* this function does a SSL/TLS (re-)handshake */
-static int handshake(vtls_session_t *sess,
-	int duringconnect,
-	int nonblocking)
+static int handshake(vtls_session_t *sess, int nonblocking)
 {
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
 	int sockfd = sess->sockfd;
 	long timeout_ms;
 	int rc;
@@ -319,8 +318,7 @@ static int handshake(vtls_session_t *sess,
 		{
 			int writefd = ssl_connect_2_writing == sess->connecting_state ? sockfd : -1;
 			int readfd = ssl_connect_2_reading == sess->connecting_state ? sockfd : -1;
-			int what = Curl_socket_ready(readfd, writefd,
-				nonblocking ? 0 : timeout_ms ? timeout_ms : 1000);
+			int what = Curl_socket_ready(readfd, writefd, timeout_ms);
 
 			if (what < 0) {
 				/* fatal error */
@@ -338,17 +336,17 @@ static int handshake(vtls_session_t *sess,
 			/* socket is readable or writable */
 		}
 
-		rc = gnutls_handshake(session);
+		rc = gnutls_handshake(backend->session);
 
 		if ((rc == GNUTLS_E_AGAIN) || (rc == GNUTLS_E_INTERRUPTED)) {
-			sess->connecting_state = gnutls_record_get_direction(session) ?
+			sess->connecting_state = gnutls_record_get_direction(backend->session) ?
 				ssl_connect_2_writing : ssl_connect_2_reading;
 			continue;
 		} else if ((rc < 0) && !gnutls_error_is_fatal(rc)) {
 			const char *strerr = NULL;
 
 			if (rc == GNUTLS_E_WARNING_ALERT_RECEIVED) {
-				int alert = gnutls_alert_get(session);
+				int alert = gnutls_alert_get(backend->session);
 				strerr = gnutls_alert_get_name(alert);
 			}
 
@@ -360,7 +358,7 @@ static int handshake(vtls_session_t *sess,
 			const char *strerr = NULL;
 
 			if (rc == GNUTLS_E_FATAL_ALERT_RECEIVED) {
-				int alert = gnutls_alert_get(session);
+				int alert = gnutls_alert_get(backend->session);
 				strerr = gnutls_alert_get_name(alert);
 			}
 
@@ -391,7 +389,6 @@ gtls_connect_step1(vtls_session_t *sess)
 {
 //	struct SessionHandle *data = conn->data;
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
 	int rc;
 	int sni = 1; /* default is SNI enabled */
 #ifdef ENABLE_IPV6
@@ -492,7 +489,7 @@ gtls_connect_step1(vtls_session_t *sess)
 	}
 
 	/* Initialize TLS session as a client */
-	rc = gnutls_init(&session, GNUTLS_CLIENT);
+	rc = gnutls_init(&backend->session, GNUTLS_CLIENT);
 	if (rc != GNUTLS_E_SUCCESS) {
 		printf("gnutls_init() failed: %d", rc);
 		return CURLE_SSL_CONNECT_ERROR;
@@ -503,25 +500,25 @@ gtls_connect_step1(vtls_session_t *sess)
 		(Curl_inet_pton(AF_INET6, sess->hostname, &addr) == 0 &&
 #endif
 		sni &&
-		gnutls_server_name_set(session, GNUTLS_NAME_DNS, sess->hostname, strlen(sess->hostname)) < 0)
+		gnutls_server_name_set(backend->session, GNUTLS_NAME_DNS, sess->hostname, strlen(sess->hostname)) < 0)
 	{
 		printf("WARNING: failed to configure server name indication (SNI) TLS extension\n");
 	}
 
 	/* Use default priorities */
-	rc = gnutls_set_default_priority(session);
+	rc = gnutls_set_default_priority(backend->session);
 	if (rc != GNUTLS_E_SUCCESS)
 		return CURLE_SSL_CONNECT_ERROR;
 
 #ifndef USE_GNUTLS_PRIORITY_SET_DIRECT
-	rc = gnutls_cipher_set_priority(session, cipher_priority);
+	rc = gnutls_cipher_set_priority(backend->session, cipher_priority);
 	if (rc != GNUTLS_E_SUCCESS)
 		return CURLE_SSL_CONNECT_ERROR;
 
 	/* Sets the priority on the certificate types supported by gnutls. Priority
 	 is higher for types specified before others. After specifying the types
 	 you want, you must append a 0. */
-	rc = gnutls_certificate_type_set_priority(session, cert_type_priority);
+	rc = gnutls_certificate_type_set_priority(backend->session, cert_type_priority);
 	if (rc != GNUTLS_E_SUCCESS)
 		return CURLE_SSL_CONNECT_ERROR;
 
@@ -555,7 +552,7 @@ gtls_connect_step1(vtls_session_t *sess)
 		return CURLE_SSL_CONNECT_ERROR;
 		break;
 	}
-	rc = gnutls_protocol_set_priority(session, protocol_priority);
+	rc = gnutls_protocol_set_priority(backend->session, protocol_priority);
 	if (rc != GNUTLS_E_SUCCESS) {
 		printf("Did you pass a valid GnuTLS cipher list?\n");
 		return CURLE_SSL_CONNECT_ERROR;
@@ -592,7 +589,8 @@ gtls_connect_step1(vtls_session_t *sess)
 		return CURLE_SSL_CONNECT_ERROR;
 		break;
 	}
-	rc = gnutls_priority_set_direct(session, prioritylist, &err);
+	printf("priority string %s\n", prioritylist);
+	rc = gnutls_priority_set_direct(backend->session, prioritylist, &err);
 	if ((rc == GNUTLS_E_INVALID_REQUEST) && err) {
 		if (!strcmp(err, GNUTLS_SRP)) {
 			/* This GnuTLS was probably compiled without support for SRP.
@@ -606,7 +604,7 @@ gtls_connect_step1(vtls_session_t *sess)
 			if (validprioritylen)
 				/* Remove the :+SRP */
 				prioritycopy[validprioritylen - 1] = 0;
-			rc = gnutls_priority_set_direct(session, prioritycopy, &err);
+			rc = gnutls_priority_set_direct(backend->session, prioritycopy, &err);
 			free(prioritycopy);
 		}
 	}
@@ -623,7 +621,7 @@ gtls_connect_step1(vtls_session_t *sess)
 			protocols[0].size = NGHTTP2_PROTO_VERSION_ID_LEN;
 			protocols[1].data = ALPN_HTTP_1_1;
 			protocols[1].size = ALPN_HTTP_1_1_LENGTH;
-			gnutls_alpn_set_protocols(session, protocols, protocols_size, 0);
+			gnutls_alpn_set_protocols(backend->session, protocols, protocols_size, 0);
 			printf("ALPN, offering %s, %s\n", NGHTTP2_PROTO_VERSION_ID,
 				ALPN_HTTP_1_1);
 			connssl->asked_for_h2 = 1;
@@ -647,26 +645,26 @@ gtls_connect_step1(vtls_session_t *sess)
 #ifdef USE_TLS_SRP
 	/* put the credentials to the current session */
 	if (data->set.ssl.authtype == CURL_TLSAUTH_SRP) {
-		rc = gnutls_credentials_set(session, GNUTLS_CRD_SRP, sess->srp_client_cred);
+		rc = gnutls_credentials_set(backend->session, GNUTLS_CRD_SRP, sess->srp_client_cred);
 		if (rc != GNUTLS_E_SUCCESS)
 			printf("gnutls_credentials_set() failed: %s", gnutls_strerror(rc));
 	} else
 #endif
-		rc = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, backend->cred);
+		rc = gnutls_credentials_set(backend->session, GNUTLS_CRD_CERTIFICATE, backend->cred);
 
 	/* set the connection handle (file descriptor for the socket) */
-	gnutls_transport_set_ptr(session, GNUTLS_INT_TO_POINTER_CAST(sess->sockfd));
+	gnutls_transport_set_ptr(backend->session, GNUTLS_INT_TO_POINTER_CAST(sess->sockfd));
 
 	/* register callback functions to send and receive data. */
-	gnutls_transport_set_push_function(session, vtls_push);
-	gnutls_transport_set_pull_function(session, vtls_pull);
+	gnutls_transport_set_push_function(backend->session, vtls_push);
+	gnutls_transport_set_pull_function(backend->session, vtls_pull);
 
 	/* lowat must be set to zero when using custom push and pull functions. */
-	gnutls_transport_set_lowat(session, 0);
+//	gnutls_transport_set_lowat(backend->session, 0);
 
 #ifdef HAS_OCSP
 	if (sess->config->verifystatus) {
-		rc = gnutls_ocsp_status_request_enable_client(session, NULL, 0, NULL);
+		rc = gnutls_ocsp_status_request_enable_client(backend->session, NULL, 0, NULL);
 		if (rc != GNUTLS_E_SUCCESS) {
 			printf("gnutls_ocsp_status_request_enable_client() failed: %d", rc);
 			return CURLE_SSL_CONNECT_ERROR;
@@ -677,9 +675,9 @@ gtls_connect_step1(vtls_session_t *sess)
 	/* This might be a reconnect, so we check for a session ID in the cache
 		to speed up things */
 
-//	if (!Curl_ssl_getsessionid(conn, &ssl_sessionid, &ssl_idsize)) {
+//	if (!Curl_ssl_getsessionid(sess, &ssl_sessionid, &ssl_idsize)) {
 		/* we got a session id, use it! */
-//		gnutls_session_set_data(session, ssl_sessionid, ssl_idsize);
+//		gnutls_session_set_data(backend->session, ssl_sessionid, ssl_idsize);
 
 		/* Informational message */
 //		printf("SSL re-using session ID\n");
@@ -758,7 +756,6 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	time_t certclock;
 	const char *ptr;
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
 	int rc;
 //	int incache;
 //	void *ssl_sessionid;
@@ -767,13 +764,14 @@ static int gtls_connect_step3(vtls_session_t *sess)
 #endif
 	int result = 0;
 
+	printf("step 3\n");
 	/* This function will return the peer's raw certificate (chain) as sent by
 		the peer. These certificates are in raw format (DER encoded for
 		X.509). In case of a X.509 then a certificate list may be present. The
 		first certificate in the list is the peer's certificate, following the
 		issuer's certificate, then the issuer's issuer etc. */
 
-	chainp = gnutls_certificate_get_peers(session, &cert_list_size);
+	chainp = gnutls_certificate_get_peers(backend->session, &cert_list_size);
 	if (!chainp) {
 		if (sess->config->verifypeer || sess->config->verifyhost || sess->config->issuercert) {
 #ifdef USE_TLS_SRP
@@ -803,7 +801,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 			regarding the certificate key size and chain size are set. To override
 			them use gnutls_certificate_set_verify_limits(). */
 
-		rc = gnutls_certificate_verify_peers2(session, &verify_status);
+		rc = gnutls_certificate_verify_peers2(backend->session, &verify_status);
 		if (rc < 0) {
 			printf("server cert verify failed: %d", rc);
 			return CURLE_SSL_CONNECT_ERROR;
@@ -825,7 +823,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 
 #ifdef HAS_OCSP
 	if (sess->config->verifystatus) {
-		if (gnutls_ocsp_status_request_is_checked(session, 0) == 0) {
+		if (gnutls_ocsp_status_request_is_checked(backend->session, 0) == 0) {
 			if (verify_status & GNUTLS_CERT_REVOKED)
 				printf("SSL server certificate was REVOKED\n");
 			else
@@ -1025,16 +1023,16 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	gnutls_x509_crt_deinit(x509_cert);
 
 	/* compression algorithm (if any) */
-	ptr = gnutls_compression_get_name(gnutls_compression_get(session));
+	ptr = gnutls_compression_get_name(gnutls_compression_get(backend->session));
 	/* the *_get_name() says "NULL" if GNUTLS_COMP_NULL is returned */
 	printf("\t compression: %s\n", ptr);
 
 	/* the name of the cipher used. ie 3DES. */
-	ptr = gnutls_cipher_get_name(gnutls_cipher_get(session));
+	ptr = gnutls_cipher_get_name(gnutls_cipher_get(backend->session));
 	printf("\t cipher: %s\n", ptr);
 
 	/* the MAC algorithms name. ie SHA1 */
-	ptr = gnutls_mac_get_name(gnutls_mac_get(session));
+	ptr = gnutls_mac_get_name(gnutls_mac_get(backend->session));
 	printf("\t MAC: %s\n", ptr);
 
 #ifdef HAS_ALPN
@@ -1122,12 +1120,13 @@ static int gtls_connect_common(vtls_session_t *sess, int nonblocking, int *done)
 			return rc;
 	}
 
-	rc = handshake(sess, 1, nonblocking);
+	rc = handshake(sess, nonblocking);
 	if (rc)
 		/* handshake() sets its own error message with failf() */
 		return rc;
 
 	/* Finish connecting once the handshake is done */
+	printf("rc=%d connecting state %d\n", rc, sess->connecting_state);
 	if (ssl_connect_1 == sess->connecting_state) {
 		rc = gtls_connect_step3(sess);
 		if (rc)
@@ -1139,17 +1138,12 @@ static int gtls_connect_common(vtls_session_t *sess, int nonblocking, int *done)
 	return 0;
 }
 
-int backend_connect_nonblocking(vtls_session_t *sess, int *done)
-{
-	return gtls_connect_common(sess, 1, done);
-}
-
 int backend_connect(vtls_session_t *sess)
 {
 	int result;
 	int done = 0;
 
-	result = gtls_connect_common(sess, 0, &done);
+	result = gtls_connect_common(sess, 1, &done);
 	if (result)
 		return result;
 
@@ -1164,14 +1158,28 @@ ssize_t backend_write(vtls_session_t *sess,
 	int *curlcode)
 {
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
-	ssize_t rc = gnutls_record_send(session, buf, count);
+	ssize_t rc;
 
+	printf("write timeout=%d count=%zd\n",sess->config->write_timeout,count);
+	int what = Curl_socket_ready(-1, sess->sockfd, sess->config->write_timeout);
+	if (what < 0) {
+		/* fatal error */
+		printf("select/poll on SSL socket, errno: %d", SOCKERRNO);
+		return CURLE_SSL_CONNECT_ERROR;
+	} else if (0 == what) {
+		if (sess->config->write_timeout) {
+			/* timeout */
+			printf("SSL connection write timeout at %d", sess->config->write_timeout);
+			return CURLE_OPERATION_TIMEDOUT;
+		}
+	}
+
+	sleep(1);
+	rc = gnutls_record_send(backend->session, buf, count);
+
+	printf("rc=%zd\n",rc);
 	if (rc < 0) {
-		*curlcode = (rc == GNUTLS_E_AGAIN)
-			? CURLE_AGAIN
-			: CURLE_SEND_ERROR;
-
+		*curlcode = (rc == GNUTLS_E_AGAIN) ? CURLE_AGAIN : CURLE_SEND_ERROR;
 		rc = -1;
 	}
 
@@ -1181,11 +1189,10 @@ ssize_t backend_write(vtls_session_t *sess,
 static void close_one(vtls_session_t *sess)
 {
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
 
-	if (session) {
-		gnutls_bye(session, GNUTLS_SHUT_RDWR);
-		gnutls_deinit(session);
+	if (backend->session) {
+		gnutls_bye(backend->session, GNUTLS_SHUT_RDWR);
+		gnutls_deinit(backend->session);
 		backend->session = NULL;
 	}
 	if (backend->cred) {
@@ -1280,13 +1287,27 @@ int backend_shutdown(vtls_session_t *sess)
 
 ssize_t backend_read(vtls_session_t *sess,
 	char *buf, /* store read data here */
-	size_t buffersize, /* max amount to read */
+	size_t count, /* max amount to read */
 	int *curlcode)
 {
 	struct backend_session_data *backend = sess->backend_data;
 	ssize_t ret;
 
-	ret = gnutls_record_recv(backend->session, buf, buffersize);
+	int what = Curl_socket_ready(sess->sockfd, -1, sess->config->read_timeout);
+
+	if (what < 0) {
+		/* fatal error */
+		printf("select/poll on SSL socket, errno: %d", SOCKERRNO);
+		return CURLE_SSL_CONNECT_ERROR;
+	} else if (0 == what) {
+		if (sess->config->read_timeout) {
+			/* timeout */
+			printf("SSL connection timeout at %d", sess->config->read_timeout);
+			return CURLE_OPERATION_TIMEDOUT;
+		}
+	}
+
+	ret = gnutls_record_recv(backend->session, buf, count);
 	if ((ret == GNUTLS_E_AGAIN) || (ret == GNUTLS_E_INTERRUPTED)) {
 		*curlcode = CURLE_AGAIN;
 		return -1;
@@ -1295,7 +1316,7 @@ ssize_t backend_read(vtls_session_t *sess,
 	if (ret == GNUTLS_E_REHANDSHAKE) {
 		/* BLOCKING call, this is bad but a work-around for now. Fixing this "the
 			proper way" takes a whole lot of work. */
-		int result = handshake(sess, 0, 0);
+		int result = handshake(sess, 0);
 		if (result)
 			/* handshake() writes error message on its own */
 			*curlcode = result;

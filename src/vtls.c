@@ -99,7 +99,9 @@ static const struct _vtls_config_st _default_config_static = {
 	NULL, /* cipher_list; list of ciphers to use */
 	NULL, /* username: TLS username (for, e.g., SRP) */
 	NULL, /* password: TLS password (for, e.g., SRP) */
-	10*1000, /* connect timeout in ms */
+	30*1000, /* connect timeout in ms */
+	30*1000, /* read timeout in ms */
+	30*1000, /* write timeout in ms */
 	CURL_TLSAUTH_NONE, /* TLS authentication type (default NONE) */
 	CURL_SSLVERSION_TLSv1_0,	/* version: what TLS version the client wants to use */
 	1, /* verifypeer: if peer verification is requested */
@@ -171,6 +173,12 @@ int vtls_config_init(vtls_config_t **config, ...)
 			break;
 		case VTLS_CFG_CONNECT_TIMEOUT:
 			(*config)->connect_timeout = va_arg(args, int);
+			break;
+		case VTLS_CFG_READ_TIMEOUT:
+			(*config)->read_timeout = va_arg(args, int);
+			break;
+		case VTLS_CFG_WRITE_TIMEOUT:
+			(*config)->write_timeout = va_arg(args, int);
 			break;
 		default:
 			/* unknown key */
@@ -330,11 +338,13 @@ int vtls_connect(vtls_session_t *sess, int sockfd, const char *hostname)
 
 ssize_t vtls_write(vtls_session_t *sess, const char *buf, size_t count, int *curlcode)
 {
+	sess->write_start = curlx_tvnow();
 	return backend_write(sess, buf, count, curlcode);
 }
 
 ssize_t vtls_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode)
 {
+	sess->read_start = curlx_tvnow();
 	return backend_read(sess, buf, count, curlcode);
 }
 

@@ -90,7 +90,7 @@ int _get_connected_socket(const char *host, int port)
 		return rc;
 	}
 
-	if ((sockfd = _get_async_socket()) == -1) {
+	if ((sockfd = _get_async_socket()) < 0) {
 		fprintf(stderr, "Failed to get socket\n");
 		freeaddrinfo(addrinfo);
 		return rc;
@@ -110,7 +110,7 @@ int _get_connected_socket(const char *host, int port)
 
 
 	freeaddrinfo(addrinfo);
-	return 0;
+	return sockfd;
 }
 
 int main(int argc, const char *const *argv)
@@ -144,6 +144,8 @@ int main(int argc, const char *const *argv)
 		VTLS_CFG_CIPHER_LIST, NULL,
 		VTLS_CFG_LOCK_CALLBACK, NULL,
 		VTLS_CFG_CONNECT_TIMEOUT, 30*1000,
+		VTLS_CFG_READ_TIMEOUT, 30*1000,
+		VTLS_CFG_WRITE_TIMEOUT, 30*1000,
 		NULL))
 	{
 		fprintf(stderr, "Failed to init default config\n");
@@ -165,16 +167,19 @@ int main(int argc, const char *const *argv)
 		fprintf(stderr, "Failed to connect (%d)\n", rc);
 		return 1;
 	}
-
+	printf("handshake done\n");
+	
 #define HTTP_REQUEST \
-"GET / HTTP\1.1\r\n"\
+"GET / HTTP/1.1\r\n"\
 "Host: www.google.com\r\n"\
+"Accept: */*\r\n"\
 "\r\n"
 
 	if ((nbytes = vtls_write(sess, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1, &status)) < 0) {
 		fprintf(stderr, "Failed to write (%d)\n", rc);
 		return 1;
 	}
+	printf("data written (%zd bytes)\n", nbytes);
 
 	while ((nbytes = vtls_read(sess, buf, sizeof(buf), &status)) >= 0) {
 		fwrite(buf, 1, nbytes, stdout);

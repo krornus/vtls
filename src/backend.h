@@ -39,6 +39,8 @@ struct _vtls_config_st {
 	const char *username; /* TLS username (for, e.g., SRP) */
 	const char *password; /* TLS password (for, e.g., SRP) */
 	int connect_timeout; /* connection timeout in ms */
+	int read_timeout; /* read timeout in ms */
+	int write_timeout; /* write timeout in ms */
 	enum CURL_TLSAUTH authtype; /* TLS authentication type (default SRP) */
 	char version; /* what TLS version the client wants to use */
 	char verifypeer; /* if peer verification is requested */
@@ -52,6 +54,8 @@ struct _vtls_session_st {
 	const char *hostname; /* SNI hostname */
 	void *backend_data;
 	struct timeval connect_start;
+	struct timeval read_start;
+	struct timeval write_start;
 	int sockfd;
 	int use;
 	int state;
@@ -74,7 +78,6 @@ int backend_session_init(vtls_session_t *sess);
 void backend_session_deinit(vtls_session_t *sess);
 ssize_t backend_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode);
 ssize_t backend_write(vtls_session_t *sess, const void *buf, size_t count, int *curlcode);
-int backend_connect_nonblocking(vtls_session_t *sess, int *done);
 int backend_connect(vtls_session_t *sess);
 void backend_close(vtls_session_t *sess);
 int backend_shutdown(vtls_session_t *sess);

@@ -47,7 +47,7 @@
 
 /* enum for the nonblocking SSL connection state machine */
 typedef enum {
-  ssl_connect_1,
+  ssl_connect_1 = 0,
   ssl_connect_2,
   ssl_connect_2_reading,
   ssl_connect_2_writing,
@@ -235,6 +235,8 @@ enum {
 	VTLS_CFG_CIPHER_LIST,
 	VTLS_CFG_LOCK_CALLBACK,
 	VTLS_CFG_CONNECT_TIMEOUT,
+	VTLS_CFG_READ_TIMEOUT,
+	VTLS_CFG_WRITE_TIMEOUT,
 	VTLS_CFG_LAST
 };
 
