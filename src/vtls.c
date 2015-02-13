@@ -44,7 +44,9 @@
 	http://httpd.apache.org/docs-2.0/ssl/ssl_intro.html
  */
 
-// #include "curl_setup.h"
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -89,6 +91,8 @@ static const struct _vtls_config_st _default_config_static = {
 	NULL, /* CApath: certificate directory (doesn't work on windows) */
 	NULL, /* CAfile: certificate to verify peer against */
 	NULL, /* CRLfile; CRL to check certificate revocation */
+	NULL, /* CERTfile: */
+	NULL, /* KEYfile: */
 	NULL, /* issuercert: optional issuer certificate filename */
 	NULL, /* random_file: path to file containing "random" data */
 	NULL, /* egdsocket; path to file containing the EGD daemon socket */
@@ -100,7 +104,8 @@ static const struct _vtls_config_st _default_config_static = {
 	CURL_SSLVERSION_TLSv1_0,	/* version: what TLS version the client wants to use */
 	1, /* verifypeer: if peer verification is requested */
 	1, /* verifyhost: if hostname matching is requested */
-	1  /* verifystatus: if certificate status check is requested */
+	1, /* verifystatus: if certificate status check is requested */
+	0  /* cert_type: filetype of CERTfile and KEYfile */
 };
 static const vtls_config_t *_default_config;
 
@@ -164,9 +169,13 @@ int vtls_config_init(vtls_config_t **config, ...)
 		case VTLS_CFG_LOCK_CALLBACK:
 			(*config)->lock_callback = va_arg(args, void(*)(int));
 			break;
+		case VTLS_CFG_CONNECT_TIMEOUT:
+			(*config)->connect_timeout = va_arg(args, int);
+			break;
 		default:
 			/* unknown key */
-			vtls_config_free(*config);
+			printf("Unknown key %d\n", key);
+			vtls_config_deinit(*config);
 			return -3;
 		}
 	}
@@ -219,7 +228,7 @@ int vtls_config_clone(const vtls_config_t *src, vtls_config_t **dst)
 }
 #undef DUP_MEMBER
 
-void vtls_config_free(vtls_config_t *config)
+void vtls_config_deinit(vtls_config_t *config)
 {
 	if (!config || config == &_default_config_static)
 		return;
@@ -314,8 +323,19 @@ int vtls_connect(vtls_session_t *sess, int sockfd, const char *hostname)
 	sess->state = ssl_connection_negotiating;
 	sess->sockfd = sockfd;
 	sess->hostname = strdup(hostname);
+	sess->connect_start = curlx_tvnow();
 
 	return backend_connect(sess);
+}
+
+ssize_t vtls_write(vtls_session_t *sess, const char *buf, size_t count, int *curlcode)
+{
+	return backend_write(sess, buf, count, curlcode);
+}
+
+ssize_t vtls_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode)
+{
+	return backend_read(sess, buf, count, curlcode);
 }
 
 void vtls_close(vtls_session_t *sess)
@@ -363,9 +383,5 @@ int vtls_md5sum(unsigned char *tmp, /* input */
  */
 int vtls_cert_status_request(void)
 {
-#ifdef curlssl_cert_status_request
-	return curlssl_cert_status_request();
-#else
-	return 0;
-#endif
+	return backend_cert_status_request();
 }

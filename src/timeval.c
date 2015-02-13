@@ -20,6 +20,10 @@
  *
  ***************************************************************************/
 
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
+
 #include <time.h>
 #include "timeval.h"
 
@@ -131,4 +135,11 @@ double curlx_tvdiff_secs(struct timeval newer, struct timeval older)
 long Curl_tvlong(struct timeval t1)
 {
 	return t1.tv_sec;
+}
+
+int vtls_timeleft_ms(struct timeval *start, int timeout_ms)
+{
+	struct timeval now = curlx_tvnow();
+
+	return (start->tv_sec - now.tv_sec) * 1000 + (start->tv_usec - now.tv_usec) / 1000 + timeout_ms;
 }

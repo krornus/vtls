@@ -21,11 +21,17 @@
 #define SET_SOCKERRNO(x)  (errno = (x))
 #endif
 
+#define CURL_CSELECT_IN   0x01
+#define CURL_CSELECT_OUT  0x02
+#define CURL_CSELECT_ERR  0x04
+
 struct _vtls_config_st {
 	void (*lock_callback)(int); /* callback function for multithread library use */
 	const char *CApath; /* certificate directory (doesn't work on windows) */
 	const char *CAfile; /* certificate to verify peer against */
 	const char *CRLfile; /* CRL to check certificate revocation */
+	const char *CERTfile;
+	const char *KEYfile;
 	const char *issuercert; /* optional issuer certificate filename */
 	const char *random_file; /* path to file containing "random" data */
 	const char *egdsocket; /* path to file containing the EGD daemon socket */
@@ -38,12 +44,14 @@ struct _vtls_config_st {
 	char verifypeer; /* if peer verification is requested */
 	char verifyhost; /* if hostname matching is requested */
 	char verifystatus; /* if certificate status check is requested */
+	char cert_type; /* filetype of CERTfile and KEYfile */
 };
 
 struct _vtls_session_st {
 	const vtls_config_t *config;
 	const char *hostname; /* SNI hostname */
 	void *backend_data;
+	struct timeval connect_start;
 	int sockfd;
 	int use;
 	int state;
@@ -64,6 +72,8 @@ int backend_init(vtls_config_t *config);
 int backend_deinit(void);
 int backend_session_init(vtls_session_t *sess);
 void backend_session_deinit(vtls_session_t *sess);
+ssize_t backend_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode);
+ssize_t backend_write(vtls_session_t *sess, const void *buf, size_t count, int *curlcode);
 int backend_connect_nonblocking(vtls_session_t *sess, int *done);
 int backend_connect(vtls_session_t *sess);
 void backend_close(vtls_session_t *sess);

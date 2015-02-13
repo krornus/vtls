@@ -24,7 +24,9 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -50,8 +52,9 @@ static int _get_async_socket(void)
 
 #ifdef SOCK_NONBLOCK
 	if ((sockfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) != -1) {
-		int on = 1;
 #else
+	int on = 1;
+
 	if ((sockfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) != -1) {
 		int on = 1;
 
@@ -74,36 +77,52 @@ int _get_connected_socket(const char *host, int port)
 {
 	struct addrinfo *addrinfo, hints;
 	int rc, sockfd;
-
-	if ((sockfd = _get_async_socket()) == -1) {
-		fprintf(stderr, "Failed to get socket\n");
-		return -1;
-	}
+	char s_port[16];
 
 	memset(&hints, 0 ,sizeof(hints));
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_NUMERICSERV;
+
+	snprintf(s_port, sizeof(s_port), "%d", port);
+	if ((rc = getaddrinfo(host, s_port, &hints, &addrinfo))) {
+		fprintf(stderr, "Failed to resolve %s\n", host);
+		return rc;
+	}
+
+	if ((sockfd = _get_async_socket()) == -1) {
+		fprintf(stderr, "Failed to get socket\n");
+		freeaddrinfo(addrinfo);
+		return rc;
+	}
+
+	if ((rc = connect(sockfd, addrinfo->ai_addr, addrinfo->ai_addrlen))
+		&& errno != EAGAIN
+#ifdef EINPROGRESS
+		&& errno != EINPROGRESS
+#endif
+		)
+	{
+		fprintf(stderr, "Failed to get socket\n");
+		freeaddrinfo(addrinfo);
+		return rc;
+	}
+
+
+	freeaddrinfo(addrinfo);
+	return 0;
 }
 
 int main(int argc, const char *const *argv)
 {
 	vtls_session_t *sess = NULL;
 	vtls_config_t *default_config;
-	struct addrinfo *addrinfo, hints;
-	int rc, sockfd;
+	int rc, sockfd, status;
 	ssize_t nbytes;
 	char buf[2048];
+	const char *hostname = "www.google.com";
 
-	if ((rc = getaddrinfo("www.google.com", 443, &hints, &addrinfo))) {
-		fprintf(stderr, "Failed to resolve (%s)\n", gai_strerror(rc));
-		return 1;
-	}
-
-	if ((rc = connect(sockfd, addrinfo->ai_addr, addrinfo->ai_addrlen))) {
-		fprintf(stderr, "Failed to connect (%s)\n", rc);
-		return 1;
-	}
+	sockfd = _get_connected_socket(hostname, 443);
 
 	/*
 	 * Plain text connection has been established.
@@ -137,32 +156,34 @@ int main(int argc, const char *const *argv)
 		return 1;
 	}
 
-	if ((rc = vtls_session_init(&sess, NULL, sockfd))) {
-		fprintf(stderr, "Failed to init vtls session init (%d)\n", rc);
+	if ((rc = vtls_session_init(&sess, NULL))) {
+		fprintf(stderr, "Failed to init vtls session (%d)\n", rc);
 		return 1;
 	}
 
-	if ((rc = vtls_connect(sess))) {
+	if ((rc = vtls_connect(sess, sockfd, hostname))) {
 		fprintf(stderr, "Failed to connect (%d)\n", rc);
 		return 1;
 	}
 
-	if ((nbytes = vtls_write(sess, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1)) < 0) {
+#define HTTP_REQUEST \
+"GET / HTTP\1.1\r\n"\
+"Host: www.google.com\r\n"\
+"\r\n"
+
+	if ((nbytes = vtls_write(sess, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1, &status)) < 0) {
 		fprintf(stderr, "Failed to write (%d)\n", rc);
 		return 1;
 	}
 
-	while ((nbytes = vtls_read(sess, buf, sizeof(buf))) >= 0) {
-		fwrite(buf, 1, nbytes, stdout)
+	while ((nbytes = vtls_read(sess, buf, sizeof(buf), &status)) >= 0) {
+		fwrite(buf, 1, nbytes, stdout);
 	}
 
-	if ((rc = vtls_close(sess))) {
-		fprintf(stderr, "Failed to init vtls session init\n");
-		return 1;
-	}
+	vtls_close(sess);
 
 	vtls_config_deinit(default_config);
-	vtls_session_deinit(&sess);
+	vtls_session_deinit(sess);
 	vtls_deinit();
 
 	/*
@@ -170,6 +191,7 @@ int main(int argc, const char *const *argv)
 	 * We could again send/recv plain text here.
 	 */
 
-	freeaddrinfo(addrinfo);
 	close(sockfd);
+
+	return 0;
 }

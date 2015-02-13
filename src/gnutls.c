@@ -28,7 +28,9 @@
  * since they were not present in 1.0.X.
  */
 
-// #include "curl_setup.h"
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -38,6 +40,9 @@
 #include <gnutls/x509.h>
 
 #include "common.h"
+#include "timeval.h"
+#include "select.h"
+#include "inet_pton.h"
 #include "backend.h"
 
 #ifdef USE_GNUTLS_NETTLE
@@ -85,10 +90,10 @@ static void tls_log_func(int level, const char *str)
 }
 #endif
 
-static struct backend_session_data {
-	gnutls_session_t *session;
-	gnutls_certificate_credentials_t *cred;
-	gnutls_certificate_credentials_t *srp_client_cred;
+struct backend_session_data {
+	gnutls_session_t session;
+	gnutls_certificate_credentials_t cred;
+	gnutls_certificate_credentials_t srp_client_cred;
 };
 static int _init_backend = 0;
 
@@ -218,7 +223,7 @@ int backend_deinit(void)
 
 int backend_session_init(vtls_session_t *sess)
 {
-	if ((sess->backend_data = calloc(1, sizeof(struct backend_session_data))))
+	if (!(sess->backend_data = calloc(1, sizeof(struct backend_session_data))))
 		return -2;
 
 	return 0;
@@ -293,14 +298,14 @@ static int handshake(vtls_session_t *sess,
 	int nonblocking)
 {
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t *session = backend->session;
+	gnutls_session_t session = backend->session;
 	int sockfd = sess->sockfd;
 	long timeout_ms;
 	int rc;
 
 	for (;;) {
 		/* check allowed time left */
-		timeout_ms = Curl_timeleft(data, NULL, duringconnect);
+		timeout_ms = vtls_timeleft_ms(&sess->connect_start, sess->config->connect_timeout);
 
 		if (timeout_ms < 0) {
 			/* no need to continue if time already is up */
@@ -336,8 +341,7 @@ static int handshake(vtls_session_t *sess,
 		rc = gnutls_handshake(session);
 
 		if ((rc == GNUTLS_E_AGAIN) || (rc == GNUTLS_E_INTERRUPTED)) {
-			sess->connecting_state =
-				gnutls_record_get_direction(session) ?
+			sess->connecting_state = gnutls_record_get_direction(session) ?
 				ssl_connect_2_writing : ssl_connect_2_reading;
 			continue;
 		} else if ((rc < 0) && !gnutls_error_is_fatal(rc)) {
@@ -373,13 +377,11 @@ static int handshake(vtls_session_t *sess,
 	}
 }
 
-static gnutls_x509_crt_fmt_t do_file_type(const char *type)
+static gnutls_x509_crt_fmt_t do_file_type(int type)
 {
-	if (!type || !type[0])
+	if (type == VTLS_FILETYPE_PEM)
 		return GNUTLS_X509_FMT_PEM;
-	if (vtls_strcaseequal_ascii(type, "PEM"))
-		return GNUTLS_X509_FMT_PEM;
-	if (vtls_strcaseequal_ascii(type, "DER"))
+	if (type == VTLS_FILETYPE_DER)
 		return GNUTLS_X509_FMT_DER;
 	return -1;
 }
@@ -391,7 +393,6 @@ gtls_connect_step1(vtls_session_t *sess)
 	struct backend_session_data *backend = sess->backend_data;
 	gnutls_session_t session = backend->session;
 	int rc;
-	size_t ssl_idsize;
 	int sni = 1; /* default is SNI enabled */
 #ifdef ENABLE_IPV6
 	struct in6_addr addr;
@@ -632,11 +633,11 @@ gtls_connect_step1(vtls_session_t *sess)
 	}
 #endif
 
-	if (sess->CERTfile) {
+	if (sess->config->CERTfile) {
 		if (gnutls_certificate_set_x509_key_file(backend->cred,
 			sess->config->CERTfile,
 			sess->config->KEYfile ? sess->config->KEYfile : sess->config->CERTfile,
-			do_file_type(sess->config->cert_type])) != GNUTLS_E_SUCCESS)
+			do_file_type(sess->config->cert_type)) != GNUTLS_E_SUCCESS)
 		{
 			printf("error reading X.509 key or certificate file");
 			return CURLE_SSL_CONNECT_ERROR;
@@ -732,13 +733,13 @@ static int pkp_pin_peer_pubkey(gnutls_x509_crt_t cert,
 		/* End Gyrations */
 
 		/* The one good exit point */
-		result = Curl_pin_peer_pubkey(pinnedpubkey, buff1, len1);
+//		result = Curl_pin_peer_pubkey(pinnedpubkey, buff1, len1);
 	} while (0);
 
 	if (NULL != key)
 		gnutls_pubkey_deinit(key);
 
-	Curl_safefree(buff1);
+//	Curl_safefree(buff1);
 
 	return result;
 }
@@ -759,8 +760,8 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	struct backend_session_data *backend = sess->backend_data;
 	gnutls_session_t session = backend->session;
 	int rc;
-	int incache;
-	void *ssl_sessionid;
+//	int incache;
+//	void *ssl_sessionid;
 #ifdef HAS_ALPN
 	gnutls_datum_t proto;
 #endif
@@ -923,12 +924,12 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	if (!rc) {
 		if (sess->config->verifyhost) {
 			printf("SSL: certificate subject name (%s) does not match "
-				"target host name '%s'", certbuf, conn->host.dispname);
+				"target host name '%s'", certbuf, sess->hostname);
 			gnutls_x509_crt_deinit(x509_cert);
 			return CURLE_PEER_FAILED_VERIFICATION;
 		} else
 			printf("\t common name: %s (does not match '%s')\n",
-				certbuf, ses->hostname);
+				certbuf, sess->hostname);
 	} else
 		printf("\t common name: %s (matched)\n", certbuf);
 
@@ -974,7 +975,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 		} else
 			printf("\t server certificate activation date OK\n");
 	}
-
+/*
 	ptr = data->set.str[STRING_SSL_PINNEDPUBLICKEY];
 	if (ptr) {
 		result = pkp_pin_peer_pubkey(x509_cert, ptr);
@@ -984,6 +985,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 			return result;
 		}
 	}
+*/
 
 	/* Show:
 
@@ -1151,19 +1153,19 @@ int backend_connect(vtls_session_t *sess)
 	if (result)
 		return result;
 
-	DEBUGASSERT(done);
+//	DEBUGASSERT(done);
 
 	return 0;
 }
 
-ssize_t backend_read(vtls_session_t *sess,
-	const void *mem,
-	size_t len,
+ssize_t backend_write(vtls_session_t *sess,
+	const void *buf,
+	size_t count,
 	int *curlcode)
 {
 	struct backend_session_data *backend = sess->backend_data;
 	gnutls_session_t session = backend->session;
-	ssize_t rc = gnutls_record_send(session, mem, len);
+	ssize_t rc = gnutls_record_send(session, buf, count);
 
 	if (rc < 0) {
 		*curlcode = (rc == GNUTLS_E_AGAIN)
@@ -1176,7 +1178,7 @@ ssize_t backend_read(vtls_session_t *sess,
 	return rc;
 }
 
-static void close_one(vtls_session_t *sess, int idx)
+static void close_one(vtls_session_t *sess)
 {
 	struct backend_session_data *backend = sess->backend_data;
 	gnutls_session_t session = backend->session;
@@ -1210,7 +1212,7 @@ void backend_close(vtls_session_t *sess)
 int backend_shutdown(vtls_session_t *sess)
 {
 	struct backend_session_data *backend = sess->backend_data;
-	gnutls_session_t session = backend->session;
+//	gnutls_session_t session = backend->session;
 	ssize_t result;
 	int retval = 0;
 //	struct SessionHandle *data = conn->data;
@@ -1227,7 +1229,7 @@ int backend_shutdown(vtls_session_t *sess)
 
 	if (backend->session) {
 		while (!done) {
-			int what = Curl_socket_ready(sess->sockfd, CURL_SOCKET_BAD, SSL_SHUTDOWN_TIMEOUT);
+			int what = Curl_socket_ready(sess->sockfd, -1, SSL_SHUTDOWN_TIMEOUT);
 			if (what > 0) {
 				/* Something to read, let's do it and hope that it is the close
 					notify alert from the server */
@@ -1249,7 +1251,7 @@ int backend_shutdown(vtls_session_t *sess)
 				}
 			} else if (0 == what) {
 				/* timeout */
-				printf("SSL shutdown timeout"\n);
+				printf("SSL shutdown timeout\n");
 				done = 1;
 				break;
 			} else {
@@ -1276,14 +1278,15 @@ int backend_shutdown(vtls_session_t *sess)
 	return retval;
 }
 
-static ssize_t backend_recv(vtls_session_t *sess,
+ssize_t backend_read(vtls_session_t *sess,
 	char *buf, /* store read data here */
 	size_t buffersize, /* max amount to read */
 	int *curlcode)
 {
+	struct backend_session_data *backend = sess->backend_data;
 	ssize_t ret;
 
-	ret = gnutls_record_recv(sess->ssl_session, buf, buffersize);
+	ret = gnutls_record_recv(backend->session, buf, buffersize);
 	if ((ret == GNUTLS_E_AGAIN) || (ret == GNUTLS_E_INTERRUPTED)) {
 		*curlcode = CURLE_AGAIN;
 		return -1;
@@ -1347,7 +1350,7 @@ int backend_md5sum(unsigned char *tmp, /* input */
 	return -1;
 }
 
-int vtls_cert_status_request(void)
+int backend_cert_status_request(void)
 {
 #ifdef HAS_OCSP
 	return 1;

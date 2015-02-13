@@ -115,9 +115,14 @@ else
   TESTS_INFO="Valgrind testing not enabled"
 fi
 
+# Checks for header files.
+AC_CHECK_HEADERS([\
+	poll.h sys/poll.h arpa/inet.h sys/select.h\
+])
+
 # check for alloca / alloca.h
 AC_FUNC_ALLOCA
-AC_CHECK_FUNCS([strndup clock_gettime gettimeofday])
+AC_CHECK_FUNCS([strndup clock_gettime gettimeofday inet_pton select poll])
 
 # Override the template file name of the generated .pc file, so that there
 # is no need to rename the template file when the API version changes.

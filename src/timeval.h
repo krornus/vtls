@@ -48,6 +48,8 @@ double curlx_tvdiff_secs(struct timeval t1, struct timeval t2);
 
 long Curl_tvlong(struct timeval t1);
 
+int vtls_timeleft_ms(struct timeval *start, int timeout_ms);
+
 /* These two defines below exist to provide the older API for library
    internals only. */
 #define Curl_tvnow() curlx_tvnow()

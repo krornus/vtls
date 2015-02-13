@@ -238,6 +238,11 @@ enum {
 	VTLS_CFG_LAST
 };
 
+enum {
+	VTLS_FILETYPE_PEM = 0,
+	VTLS_FILETYPE_DER = 0
+};
+
 typedef struct ssl_config_data *ssl_config_data_t;
 typedef struct _vtls_config_st vtls_config_t;
 typedef struct _vtls_session_st vtls_session_t;
@@ -245,7 +250,7 @@ typedef struct _vtls_session_st vtls_session_t;
 int vtls_config_init(vtls_config_t **config, ...);
 int vtls_config_matches(const vtls_config_t *config1, const vtls_config_t *config2);
 int vtls_config_clone(const vtls_config_t *source, vtls_config_t **dest);
-void vtls_config_free(vtls_config_t *config);
+void vtls_config_deinit(vtls_config_t *config);
 
 int vtls_init(vtls_config_t *config);
 void vtls_deinit(void);
@@ -255,6 +260,8 @@ void vtls_session_deinit(vtls_session_t *sess);
 int vtls_get_engine(void);
 size_t vtls_version(char *buffer, size_t size);
 
+ssize_t vtls_write(vtls_session_t *sess, const char *buf, size_t count, int *curlcode);
+ssize_t vtls_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode);
 int vtls_connect(vtls_session_t *sess, int sockfd, const char *hostname);
 int vtls_connect_nonblocking(vtls_session_t *sess, int sockfd, int *done);
 /* tell the SSL stuff to close down all open information regarding
