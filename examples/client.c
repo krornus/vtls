@@ -73,7 +73,7 @@ static int _get_async_socket(void)
 	return sockfd;
 }
 
-int _get_connected_socket(const char *host, int port)
+static int _get_connected_socket(const char *host, int port)
 {
 	struct addrinfo *addrinfo, hints;
 	int rc, sockfd;
