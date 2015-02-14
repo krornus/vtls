@@ -33,6 +33,96 @@
 #include <vtls.h>
 #include <netdb.h>
 
+static int _get_connected_socket(const char *host, int port);
+
+int main(int argc, const char *const *argv)
+{
+	vtls_session_t *sess = NULL;
+	vtls_config_t *default_config;
+	int rc, sockfd, status;
+	ssize_t nbytes;
+	char buf[2048];
+	const char *hostname = "www.google.com";
+
+	sockfd = _get_connected_socket(hostname, 443);
+
+	/*
+	 * Plain text connection has been established.
+	 * Before we establish the TLS layer, we could send/recv plain text here.
+	 */
+
+	/* optional example of how to set default config values */
+	if (vtls_config_init(&default_config,
+		VTLS_CFG_TLS_VERSION, CURL_SSLVERSION_TLSv1_0,
+		VTLS_CFG_VERIFY_PEER, 1,
+		VTLS_CFG_VERIFY_HOST, 1	,
+		VTLS_CFG_VERIFY_STATUS, 0,
+		VTLS_CFG_CA_PATH, "/etc/ssl/certs",
+		VTLS_CFG_CA_FILE, NULL,
+		VTLS_CFG_CRL_FILE, NULL,
+		VTLS_CFG_ISSUER_FILE, NULL,
+		VTLS_CFG_RANDOM_FILE, NULL,
+		VTLS_CFG_EGD_SOCKET, NULL,
+		VTLS_CFG_CIPHER_LIST, NULL,
+		VTLS_CFG_LOCK_CALLBACK, NULL,
+		VTLS_CFG_CONNECT_TIMEOUT, 30*1000,
+		VTLS_CFG_READ_TIMEOUT, 30*1000,
+		VTLS_CFG_WRITE_TIMEOUT, 30*1000,
+		NULL))
+	{
+		fprintf(stderr, "Failed to init default config\n");
+		return 1;
+	}
+
+	/* call vtls_init(NULL) to use library defaults */
+	if (vtls_init(default_config)) {
+		fprintf(stderr, "Failed to init vtls\n");
+		return 1;
+	}
+
+	if ((rc = vtls_session_init(&sess, NULL))) {
+		fprintf(stderr, "Failed to init vtls session (%d)\n", rc);
+		return 1;
+	}
+
+	if ((rc = vtls_connect(sess, sockfd, hostname))) {
+		fprintf(stderr, "Failed to connect (%d)\n", rc);
+		return 1;
+	}
+	printf("handshake done\n");
+	
+#define HTTP_REQUEST \
+"GET / HTTP/1.1\r\n"\
+"Host: www.google.com\r\n"\
+"Accept: */*\r\n"\
+"\r\n"
+
+	if ((nbytes = vtls_write(sess, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1, &status)) < 0) {
+		fprintf(stderr, "Failed to write (%d)\n", rc);
+		return 1;
+	}
+	printf("data written (%zd bytes)\n", nbytes);
+
+	while ((nbytes = vtls_read(sess, buf, sizeof(buf), &status)) >= 0) {
+		fwrite(buf, 1, nbytes, stdout);
+	}
+
+	vtls_close(sess);
+
+	vtls_config_deinit(default_config);
+	vtls_session_deinit(sess);
+	vtls_deinit();
+
+	/*
+	 * TLS connection has been shut down, but the connection is still valid.
+	 * We could again send/recv plain text here.
+	 */
+
+	close(sockfd);
+
+	return 0;
+}
+
 #ifndef SOCK_NONBLOCK
 static void _set_async(int fd)
 {
@@ -111,92 +201,4 @@ static int _get_connected_socket(const char *host, int port)
 
 	freeaddrinfo(addrinfo);
 	return sockfd;
-}
-
-int main(int argc, const char *const *argv)
-{
-	vtls_session_t *sess = NULL;
-	vtls_config_t *default_config;
-	int rc, sockfd, status;
-	ssize_t nbytes;
-	char buf[2048];
-	const char *hostname = "www.google.com";
-
-	sockfd = _get_connected_socket(hostname, 443);
-
-	/*
-	 * Plain text connection has been established.
-	 * Before we establish the TLS layer, we could send/recv plain text here.
-	 */
-
-	/* optional example of how to set default config values */
-	if (vtls_config_init(&default_config,
-		VTLS_CFG_TLS_VERSION, CURL_SSLVERSION_TLSv1_0,
-		VTLS_CFG_VERIFY_PEER, 1,
-		VTLS_CFG_VERIFY_HOST, 1,
-		VTLS_CFG_VERIFY_STATUS, 1,
-		VTLS_CFG_CA_PATH, "/etc/ssl/certs",
-		VTLS_CFG_CA_FILE, NULL,
-		VTLS_CFG_CRL_FILE, NULL,
-		VTLS_CFG_ISSUER_FILE, NULL,
-		VTLS_CFG_RANDOM_FILE, NULL,
-		VTLS_CFG_EGD_SOCKET, NULL,
-		VTLS_CFG_CIPHER_LIST, NULL,
-		VTLS_CFG_LOCK_CALLBACK, NULL,
-		VTLS_CFG_CONNECT_TIMEOUT, 30*1000,
-		VTLS_CFG_READ_TIMEOUT, 30*1000,
-		VTLS_CFG_WRITE_TIMEOUT, 30*1000,
-		NULL))
-	{
-		fprintf(stderr, "Failed to init default config\n");
-		return 1;
-	}
-
-	/* call vtls_init(NULL) to use library defaults */
-	if (vtls_init(default_config)) {
-		fprintf(stderr, "Failed to init vtls\n");
-		return 1;
-	}
-
-	if ((rc = vtls_session_init(&sess, NULL))) {
-		fprintf(stderr, "Failed to init vtls session (%d)\n", rc);
-		return 1;
-	}
-
-	if ((rc = vtls_connect(sess, sockfd, hostname))) {
-		fprintf(stderr, "Failed to connect (%d)\n", rc);
-		return 1;
-	}
-	printf("handshake done\n");
-	
-#define HTTP_REQUEST \
-"GET / HTTP/1.1\r\n"\
-"Host: www.google.com\r\n"\
-"Accept: */*\r\n"\
-"\r\n"
-
-	if ((nbytes = vtls_write(sess, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1, &status)) < 0) {
-		fprintf(stderr, "Failed to write (%d)\n", rc);
-		return 1;
-	}
-	printf("data written (%zd bytes)\n", nbytes);
-
-	while ((nbytes = vtls_read(sess, buf, sizeof(buf), &status)) >= 0) {
-		fwrite(buf, 1, nbytes, stdout);
-	}
-
-	vtls_close(sess);
-
-	vtls_config_deinit(default_config);
-	vtls_session_deinit(sess);
-	vtls_deinit();
-
-	/*
-	 * TLS connection has been shut down, but the connection is still valid.
-	 * We could again send/recv plain text here.
-	 */
-
-	close(sockfd);
-
-	return 0;
 }

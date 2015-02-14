@@ -33,6 +33,8 @@
 #endif
 
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 
 #include <gnutls/abstract.h>
@@ -389,6 +391,7 @@ gtls_connect_step1(vtls_session_t *sess)
 {
 //	struct SessionHandle *data = conn->data;
 	struct backend_session_data *backend = sess->backend_data;
+	const char *ca_directory = sess->config->CApath;
 	int rc;
 	int sni = 1; /* default is SNI enabled */
 #ifdef ENABLE_IPV6
@@ -432,7 +435,7 @@ gtls_connect_step1(vtls_session_t *sess)
 
 	/* GnuTLS only supports SSLv3 and TLSv1 */
 	if (sess->config->version == CURL_SSLVERSION_SSLv2) {
-		printf("GnuTLS does not support SSLv2");
+		printf("GnuTLS does not support SSLv2\n");
 		return CURLE_SSL_CONNECT_ERROR;
 	} else if (sess->config->version == CURL_SSLVERSION_SSLv3)
 		sni = 0; /* SSLv3 has no SNI */
@@ -440,7 +443,7 @@ gtls_connect_step1(vtls_session_t *sess)
 	/* allocate a cred struct */
 	rc = gnutls_certificate_allocate_credentials(&backend->cred);
 	if (rc != GNUTLS_E_SUCCESS) {
-		printf("gnutls_cert_all_cred() failed: %s", gnutls_strerror(rc));
+		printf("gnutls_cert_all_cred() failed: %s\n", gnutls_strerror(rc));
 		return CURLE_SSL_CONNECT_ERROR;
 	}
 
@@ -450,7 +453,7 @@ gtls_connect_step1(vtls_session_t *sess)
 
 		rc = gnutls_srp_allocate_client_credentials(&sess->srp_client_cred);
 		if (rc != GNUTLS_E_SUCCESS) {
-			printf("gnutls_srp_allocate_client_cred() failed: %s", gnutls_strerror(rc));
+			printf("gnutls_srp_allocate_client_cred() failed: %s\n", gnutls_strerror(rc));
 			return CURLE_OUT_OF_MEMORY;
 		}
 
@@ -458,11 +461,61 @@ gtls_connect_step1(vtls_session_t *sess)
 			data->set.ssl.username,
 			data->set.ssl.password);
 		if (rc != GNUTLS_E_SUCCESS) {
-			printf("gnutls_srp_set_client_cred() failed: %s", gnutls_strerror(rc));
+			printf("gnutls_srp_set_client_cred() failed: %s\n", gnutls_strerror(rc));
 			return CURLE_BAD_FUNCTION_ARGUMENT;
 		}
 	}
 #endif
+
+	if (ca_directory && *ca_directory && sess->config->verifypeer) {
+		rc = -1;
+#if GNUTLS_VERSION_NUMBER >= 0x030014
+		if (!strcmp(ca_directory, "system")) {
+			rc = gnutls_certificate_set_x509_system_trust(backend->cred);
+			if (rc < 0) {
+				printf("error reading system CA cert dir (%s)\n", gnutls_strerror(rc));
+				return CURLE_SSL_CACERT_BADFILE;
+			}
+			printf("found %d certificates in system CA cert dir\n", rc);
+		}
+#else
+		printf("system CA cert dir not supported - GnuTLS version too old\n");
+#endif
+		if (rc < 0) {
+			DIR *dir;
+			int ncerts = 0;
+
+			if ((dir = opendir(ca_directory))) {
+				struct dirent *dp;
+				size_t dirlen = strlen(ca_directory);
+
+				while ((dp = readdir(dir))) {
+					size_t len = strlen(dp->d_name);
+
+					if (len >= 4 && !strncasecmp(dp->d_name + len - 4, ".pem", 4)) {
+						struct stat st;
+						char fname[dirlen + 1 + len + 1];
+
+						snprintf(fname, sizeof(fname), "%s/%s", ca_directory, dp->d_name);
+						if (stat(fname, &st) == 0 && S_ISREG(st.st_mode)) {
+							int rc;
+
+							if ((rc = gnutls_certificate_set_x509_trust_file(backend->cred, fname, GNUTLS_X509_FMT_PEM)) <= 0)
+								printf("failed to load CA cert '%s': (%d)\n", fname, rc);
+							else
+								ncerts += rc;
+						}
+					}
+				}
+
+				closedir(dir);
+			} else {
+				printf("failed to open CA cert dir %s\n", ca_directory);
+			}
+
+			printf("found %d certificates in CA cert dir '%s'\n", ncerts, ca_directory);
+		}
+	}
 
 	if (sess->config->CAfile) {
 		/* set the trusted CA cert bundle file */
@@ -470,11 +523,11 @@ gtls_connect_step1(vtls_session_t *sess)
 
 		rc = gnutls_certificate_set_x509_trust_file(backend->cred, sess->config->CAfile, GNUTLS_X509_FMT_PEM);
 		if (rc < 0) {
-			printf("error reading ca cert file %s (%s)\n", sess->config->CAfile, gnutls_strerror(rc));
+			printf("error reading CA cert file %s (%s)\n", sess->config->CAfile, gnutls_strerror(rc));
 			if (sess->config->verifypeer)
 				return CURLE_SSL_CACERT_BADFILE;
 		} else
-			printf("found %d certificates in %s\n", rc, sess->config->CAfile);
+			printf("found %d certificates in CA cert file '%s'\n", rc, sess->config->CAfile);
 	}
 
 	if (sess->config->CRLfile) {
@@ -764,7 +817,6 @@ static int gtls_connect_step3(vtls_session_t *sess)
 #endif
 	int result = 0;
 
-	printf("step 3\n");
 	/* This function will return the peer's raw certificate (chain) as sent by
 		the peer. These certificates are in raw format (DER encoded for
 		X.509). In case of a X.509 then a certificate list may be present. The
@@ -772,6 +824,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 		issuer's certificate, then the issuer's issuer etc. */
 
 	chainp = gnutls_certificate_get_peers(backend->session, &cert_list_size);
+	printf("cert chain entries: %u\n", cert_list_size);
 	if (!chainp) {
 		if (sess->config->verifypeer || sess->config->verifyhost || sess->config->issuercert) {
 #ifdef USE_TLS_SRP
@@ -811,7 +864,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 		if (verify_status & GNUTLS_CERT_INVALID) {
 			if (sess->config->verifypeer) {
 				printf("server certificate verification failed. CAfile: %s "
-					"CRLfile: %s", sess->config->CAfile ? sess->config->CAfile : "none",
+					"CRLfile: %s\n", sess->config->CAfile ? sess->config->CAfile : "none",
 					sess->config->CRLfile ? sess->config->CRLfile : "none");
 				return CURLE_SSL_CACERT;
 			} else
@@ -827,7 +880,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 			if (verify_status & GNUTLS_CERT_REVOKED)
 				printf("SSL server certificate was REVOKED\n");
 			else
-				printf("SSL server certificate status verification FAILED");
+				printf("SSL server certificate status verification FAILED\n");
 
 			return CURLE_SSL_INVALIDCERTSTATUS;
 		} else
@@ -852,7 +905,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 		gnutls_x509_crt_deinit(x509_issuer);
 		unload_file(issuerp);
 		if (rc <= 0) {
-			printf("server certificate issuer check failed (IssuerCert: %s)",
+			printf("server certificate issuer check failed (IssuerCert: %s)\n",
 				sess->config->issuercert ? sess->config->issuercert : "none");
 			gnutls_x509_crt_deinit(x509_cert);
 			return CURLE_SSL_ISSUER_ERROR;
@@ -921,8 +974,8 @@ static int gtls_connect_step3(vtls_session_t *sess)
 #endif
 	if (!rc) {
 		if (sess->config->verifyhost) {
-			printf("SSL: certificate subject name (%s) does not match "
-				"target host name '%s'", certbuf, sess->hostname);
+			printf("SSL: certificate subject name (%s) does not match target host name '%s'\n",
+				certbuf, sess->hostname);
 			gnutls_x509_crt_deinit(x509_cert);
 			return CURLE_PEER_FAILED_VERIFICATION;
 		} else
@@ -936,7 +989,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 
 	if (certclock == (time_t) - 1) {
 		if (sess->config->verifypeer) {
-			printf("server cert expiration date verify failed");
+			printf("server cert expiration date verify failed\n");
 			gnutls_x509_crt_deinit(x509_cert);
 			return CURLE_SSL_CONNECT_ERROR;
 		} else
@@ -944,7 +997,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	} else {
 		if (certclock < time(NULL)) {
 			if (sess->config->verifypeer) {
-				printf("server certificate expiration date has passed.");
+				printf("server certificate expiration date has passed.\n");
 				gnutls_x509_crt_deinit(x509_cert);
 				return CURLE_PEER_FAILED_VERIFICATION;
 			} else
@@ -957,7 +1010,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 
 	if (certclock == (time_t) - 1) {
 		if (sess->config->verifypeer) {
-			printf("server cert activation date verify failed");
+			printf("server cert activation date verify failed\n");
 			gnutls_x509_crt_deinit(x509_cert);
 			return CURLE_SSL_CONNECT_ERROR;
 		} else
@@ -965,7 +1018,7 @@ static int gtls_connect_step3(vtls_session_t *sess)
 	} else {
 		if (certclock > time(NULL)) {
 			if (sess->config->verifypeer) {
-				printf("server certificate not activated yet.");
+				printf("server certificate not activated yet.\n");
 				gnutls_x509_crt_deinit(x509_cert);
 				return CURLE_PEER_FAILED_VERIFICATION;
 			} else
@@ -1126,7 +1179,6 @@ static int gtls_connect_common(vtls_session_t *sess, int nonblocking, int *done)
 		return rc;
 
 	/* Finish connecting once the handshake is done */
-	printf("rc=%d connecting state %d\n", rc, sess->connecting_state);
 	if (ssl_connect_1 == sess->connecting_state) {
 		rc = gtls_connect_step3(sess);
 		if (rc)
