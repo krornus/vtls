@@ -88,6 +88,10 @@
 
 static const struct _vtls_config_st _default_config_static = {
 	NULL, /* lock_callback: callback function for multithread library use */
+	NULL, /* errormsg_callback: callback function for error messages */
+	NULL, /* debugmsg_callback: callback function for debug messages */
+	NULL, /* errormsg_ctx: user context for error messages */
+	NULL, /* debugmsg_ctx: user context for debug messages */
 	NULL, /* CApath: certificate directory (doesn't work on windows) */
 	NULL, /* CAfile: certificate to verify peer against */
 	NULL, /* CRLfile; CRL to check certificate revocation */
@@ -109,7 +113,35 @@ static const struct _vtls_config_st _default_config_static = {
 	1, /* verifystatus: if certificate status check is requested */
 	0  /* cert_type: filetype of CERTfile and KEYfile */
 };
-static const vtls_config_t *_default_config;
+static vtls_config_t *_default_config;
+
+void  __attribute__ ((format (printf, 2, 3))) error_printf(vtls_config_t *config, const char *fmt, ...)
+{
+	if (!config)
+		config = _default_config;
+
+	if (config->errormsg_callback) {
+		va_list args;
+
+		va_start(args, fmt);
+		config->errormsg_callback(config->errormsg_ctx, fmt, args);
+		va_end(args);
+	}
+}
+
+void  __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_config_t *config, const char *fmt, ...)
+{
+	if (!config)
+		config = _default_config;
+
+	if (config->debugmsg_callback) {
+		va_list args;
+
+		va_start(args, fmt);
+		config->debugmsg_callback(config->debugmsg_ctx, fmt, args);
+		va_end(args);
+	}
+}
 
 #define FETCH_AND_DUP(s) \
 	if (((*config)->s = va_arg(args, const char *))) {\
@@ -171,6 +203,14 @@ int vtls_config_init(vtls_config_t **config, ...)
 		case VTLS_CFG_LOCK_CALLBACK:
 			(*config)->lock_callback = va_arg(args, void(*)(int));
 			break;
+		case VTLS_CFG_ERRORMSG_CALLBACK:
+			(*config)->errormsg_callback = va_arg(args, void(*)(void *, const char *, ...));
+			(*config)->errormsg_ctx = va_arg(args, void *);
+			break;
+		case VTLS_CFG_DEBUGMSG_CALLBACK:
+			(*config)->debugmsg_callback = va_arg(args, void(*)(void *, const char *, ...));
+			(*config)->debugmsg_ctx = va_arg(args, void *);
+			break;
 		case VTLS_CFG_CONNECT_TIMEOUT:
 			(*config)->connect_timeout = va_arg(args, int);
 			break;
@@ -182,7 +222,10 @@ int vtls_config_init(vtls_config_t **config, ...)
 			break;
 		default:
 			/* unknown key */
-			printf("Unknown key %d\n", key);
+			if ((*config)->errormsg_callback)
+				error_printf(*config, "Unknown key %d\n", key);
+			else if (_default_config->errormsg_callback)
+				error_printf(_default_config, "Unknown key %d\n", key);
 			vtls_config_deinit(*config);
 			return -3;
 		}
@@ -198,8 +241,13 @@ int vtls_config_matches(const vtls_config_t *data, const vtls_config_t *needle)
 	return ((data->version == needle->version) &&
 		(data->verifypeer == needle->verifypeer) &&
 		(data->verifyhost == needle->verifyhost) &&
+		(data->verifystatus == needle->verifystatus) &&
 		vtls_strcaseequal_ascii(data->CApath, needle->CApath) &&
 		vtls_strcaseequal_ascii(data->CAfile, needle->CAfile) &&
+		vtls_strcaseequal_ascii(data->CRLfile, needle->CRLfile) &&
+		vtls_strcaseequal_ascii(data->CERTfile, needle->CERTfile) &&
+		vtls_strcaseequal_ascii(data->KEYfile, needle->KEYfile) &&
+		vtls_strcaseequal_ascii(data->issuercert, needle->issuercert) &&
 		vtls_strcaseequal_ascii(data->random_file, needle->random_file) &&
 		vtls_strcaseequal_ascii(data->egdsocket, needle->egdsocket) &&
 		vtls_strcaseequal_ascii(data->cipher_list, needle->cipher_list));
@@ -244,6 +292,8 @@ void vtls_config_deinit(vtls_config_t *config)
 	xfree(config->CAfile);
 	xfree(config->CApath);
 	xfree(config->CRLfile);
+	xfree(config->CERTfile);
+	xfree(config->KEYfile);
 	xfree(config->cipher_list);
 	xfree(config->egdsocket);
 	xfree(config->random_file);
@@ -268,21 +318,24 @@ static int _init_vtls = 0;
  */
 int vtls_init(vtls_config_t *config)
 {
-	int ret;
+	int ret = -1;
 
 	if (config && config->lock_callback)
 		config->lock_callback(1);
 
 	/* make sure this is only done once */
 	if (_init_vtls++)
-		return 1;
+		return -1;
 
 	if (config)
-		_default_config = config;
+		ret = vtls_config_clone(config, &_default_config);
 	else
-		_default_config = &_default_config_static;
+		ret = vtls_config_clone(&_default_config_static, &_default_config);
 
-	ret = backend_init(config);
+	if (ret)
+		_init_vtls = 0; /* oom situation in vtls_config_close, allow vtls_init() again later */
+	else
+		ret = backend_init(config);
 
 	if (config && config->lock_callback)
 		config->lock_callback(0);
@@ -296,6 +349,8 @@ void vtls_deinit(void)
 	if (--_init_vtls == 0) {
 		/* only cleanup if we did a previous init */
 		backend_deinit();
+		vtls_config_deinit(_default_config);
+		_default_config = NULL;
 	}
 }
 

@@ -27,6 +27,10 @@
 
 struct _vtls_config_st {
 	void (*lock_callback)(int); /* callback function for multithread library use */
+	void (*errormsg_callback)(void *, const char *, ...); /* callback function for error messages */
+	void (*debugmsg_callback)(void *, const char *, ...); /* callback function for debug messages */
+	void *errormsg_ctx; /* context for error messages */
+	void *debugmsg_ctx; /* context for debug messages */
 	const char *CApath; /* certificate directory (doesn't work on windows) */
 	const char *CAfile; /* certificate to verify peer against */
 	const char *CRLfile; /* CRL to check certificate revocation */
@@ -50,7 +54,7 @@ struct _vtls_config_st {
 };
 
 struct _vtls_session_st {
-	const vtls_config_t *config;
+	vtls_config_t *config;
 	const char *hostname; /* SNI hostname */
 	void *backend_data;
 	struct timeval connect_start;

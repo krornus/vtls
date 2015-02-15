@@ -234,6 +234,8 @@ enum {
 	VTLS_CFG_EGD_SOCKET,
 	VTLS_CFG_CIPHER_LIST,
 	VTLS_CFG_LOCK_CALLBACK,
+	VTLS_CFG_ERRORMSG_CALLBACK,
+	VTLS_CFG_DEBUGMSG_CALLBACK,
 	VTLS_CFG_CONNECT_TIMEOUT,
 	VTLS_CFG_READ_TIMEOUT,
 	VTLS_CFG_WRITE_TIMEOUT,
@@ -248,6 +250,9 @@ enum {
 typedef struct ssl_config_data *ssl_config_data_t;
 typedef struct _vtls_config_st vtls_config_t;
 typedef struct _vtls_session_st vtls_session_t;
+
+void  __attribute__ ((format (printf, 2, 3))) error_printf(vtls_config_t *config, const char *fmt, ...);
+void  __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_config_t *config, const char *fmt, ...);
 
 int vtls_config_init(vtls_config_t **config, ...);
 int vtls_config_matches(const vtls_config_t *config1, const vtls_config_t *config2);

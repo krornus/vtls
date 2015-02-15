@@ -26,14 +26,38 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <time.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 
 #include <vtls.h>
 #include <netdb.h>
 
 static int _get_connected_socket(const char *host, int port);
+
+static void debugmsg(void *ctx, const char *fmt, va_list args)
+{
+	char buf[2048];
+	struct timeval tv;
+	struct tm *tp, tbuf;
+
+	gettimeofday(&tv, NULL); // obsoleted by POSIX.1-2008, maybe use clock_gettime() ? needs -lrt
+	tp = localtime_r((const time_t *)&tv.tv_sec, &tbuf); // cast avoids warning on OpenBSD
+
+	vsnprintf(buf, sizeof(buf), fmt, args);
+
+	printf("%02d:%02d:%02d.%03ld %s",
+		tp->tm_hour, tp->tm_min, tp->tm_sec, tv.tv_usec / 1000,
+		buf);
+}
+
+static void errormsg(void *ctx, const char *fmt, va_list args)
+{
+	debugmsg(ctx, fmt, args);
+}
+
 
 int main(int argc, const char *const *argv)
 {
@@ -65,6 +89,8 @@ int main(int argc, const char *const *argv)
 		VTLS_CFG_EGD_SOCKET, NULL,
 		VTLS_CFG_CIPHER_LIST, NULL,
 		VTLS_CFG_LOCK_CALLBACK, NULL,
+		VTLS_CFG_ERRORMSG_CALLBACK, errormsg, NULL, /* third arg is the user context */
+		VTLS_CFG_DEBUGMSG_CALLBACK, debugmsg, NULL, /* third arg is the user context */
 		VTLS_CFG_CONNECT_TIMEOUT, 30*1000,
 		VTLS_CFG_READ_TIMEOUT, 30*1000,
 		VTLS_CFG_WRITE_TIMEOUT, 30*1000,
@@ -114,7 +140,7 @@ int main(int argc, const char *const *argv)
 	vtls_deinit();
 
 	/*
-	 * TLS connection has been shut down, but the connection is still valid.
+	 * TLS connection has been shut down, but the TCP/IP connection is still valid.
 	 * We could again send/recv plain text here.
 	 */
 
