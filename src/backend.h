@@ -27,11 +27,10 @@
 
 struct _vtls_config_st {
 	void (*lock_callback)(int); /* callback function for multithread library use */
-	void (*errormsg_callback)(void *, const char *, ...); /* callback function for error messages */
-	void (*debugmsg_callback)(void *, const char *, ...); /* callback function for debug messages */
+	vtls_debug_callback_t errormsg_callback; /* callback function for error messages */
+	vtls_debug_callback_t debugmsg_callback; /* callback function for debug messages */
 	void *errormsg_ctx; /* context for error messages */
 	void *debugmsg_ctx; /* context for debug messages */
-	const char *CApath; /* certificate directory (doesn't work on windows) */
 	const char *CAfile; /* certificate to verify peer against */
 	const char *CRLfile; /* CRL to check certificate revocation */
 	const char *CERTfile;
@@ -42,9 +41,6 @@ struct _vtls_config_st {
 	const char *cipher_list; /* list of ciphers to use */
 	const char *username; /* TLS username (for, e.g., SRP) */
 	const char *password; /* TLS password (for, e.g., SRP) */
-	int connect_timeout; /* connection timeout in ms */
-	int read_timeout; /* read timeout in ms */
-	int write_timeout; /* write timeout in ms */
 	enum CURL_TLSAUTH authtype; /* TLS authentication type (default SRP) */
 	char version; /* what TLS version the client wants to use */
 	char verifypeer; /* if peer verification is requested */
@@ -55,8 +51,12 @@ struct _vtls_config_st {
 
 struct _vtls_session_st {
 	vtls_config_t *config;
-	const char *hostname; /* SNI hostname */
 	void *backend_data;
+};
+
+struct _vtls_connection_st {
+	vtls_session_t *session;
+	const char *hostname; /* SNI hostname */
 	struct timeval connect_start;
 	struct timeval read_start;
 	struct timeval write_start;
@@ -64,6 +64,10 @@ struct _vtls_session_st {
 	int use;
 	int state;
 	int connecting_state;
+	int connect_timeout; /* connection timeout in ms */
+	int read_timeout; /* read timeout in ms */
+	int write_timeout; /* write timeout in ms */
+	int curlcode; /* last error */
 };
 
 /* API of backend TLS engines */
@@ -76,15 +80,15 @@ struct _vtls_session_st {
 #define curlssl_data_pending(x,y) ((void)x, (void)y, 0)
  */
 int backend_get_engine(void);
-int backend_init(vtls_config_t *config);
+int backend_init(void);
 int backend_deinit(void);
 int backend_session_init(vtls_session_t *sess);
 void backend_session_deinit(vtls_session_t *sess);
-ssize_t backend_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode);
-ssize_t backend_write(vtls_session_t *sess, const void *buf, size_t count, int *curlcode);
-int backend_connect(vtls_session_t *sess);
-void backend_close(vtls_session_t *sess);
-int backend_shutdown(vtls_session_t *sess);
+ssize_t backend_read(vtls_connection_t *conn, char *buf, size_t count);
+ssize_t backend_write(vtls_connection_t *conn, const void *buf, size_t count);
+int backend_connect(vtls_connection_t *conn);
+void backend_close(vtls_connection_t *conn);
+int backend_shutdown(vtls_connection_t *conn);
 void backend_session_free(void *ptr);
 size_t backend_version(char *buffer, size_t size);
 int backend_md5sum(unsigned char *tmp, /* input */

@@ -86,14 +86,13 @@
                                  (data->share->specifier &             \
                                   (1<<CURL_LOCK_DATA_SSL_SESSION)))
 
-static const struct _vtls_config_st _default_config_static = {
+static const vtls_config_t _default_config_static = {
 	NULL, /* lock_callback: callback function for multithread library use */
 	NULL, /* errormsg_callback: callback function for error messages */
 	NULL, /* debugmsg_callback: callback function for debug messages */
 	NULL, /* errormsg_ctx: user context for error messages */
 	NULL, /* debugmsg_ctx: user context for debug messages */
-	NULL, /* CApath: certificate directory (doesn't work on windows) */
-	NULL, /* CAfile: certificate to verify peer against */
+	NULL, /* CAfile: certificate file or directory to verify peer against */
 	NULL, /* CRLfile; CRL to check certificate revocation */
 	NULL, /* CERTfile: */
 	NULL, /* KEYfile: */
@@ -103,11 +102,8 @@ static const struct _vtls_config_st _default_config_static = {
 	NULL, /* cipher_list; list of ciphers to use */
 	NULL, /* username: TLS username (for, e.g., SRP) */
 	NULL, /* password: TLS password (for, e.g., SRP) */
-	30*1000, /* connect timeout in ms */
-	30*1000, /* read timeout in ms */
-	30*1000, /* write timeout in ms */
 	CURL_TLSAUTH_NONE, /* TLS authentication type (default NONE) */
-	CURL_SSLVERSION_TLSv1_0,	/* version: what TLS version the client wants to use */
+	VTLS_TLSVERSION_TLSv1_0,	/* version: what TLS version the client wants to use */
 	1, /* verifypeer: if peer verification is requested */
 	1, /* verifyhost: if hostname matching is requested */
 	1, /* verifystatus: if certificate status check is requested */
@@ -115,41 +111,49 @@ static const struct _vtls_config_st _default_config_static = {
 };
 static vtls_config_t *_default_config;
 
-void  __attribute__ ((format (printf, 2, 3))) error_printf(vtls_config_t *config, const char *fmt, ...)
+void __attribute__ ((format (printf, 2, 3))) error_printf(vtls_connection_t *conn, const char *fmt, ...)
 {
-	if (!config)
-		config = _default_config;
+	vtls_error_callback_t func;
 
-	if (config->errormsg_callback) {
+	if (conn && conn->session && conn->session->config)
+		func = conn->session->config->errormsg_callback;
+	else
+		func = _default_config->errormsg_callback;
+
+	if (func) {
 		va_list args;
 
 		va_start(args, fmt);
-		config->errormsg_callback(config->errormsg_ctx, fmt, args);
+		func(conn, fmt, args);
 		va_end(args);
 	}
 }
 
-void  __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_config_t *config, const char *fmt, ...)
+void __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_connection_t *conn, const char *fmt, ...)
 {
-	if (!config)
-		config = _default_config;
+	vtls_error_callback_t func;
 
-	if (config->debugmsg_callback) {
+	if (conn && conn->session)
+		func = conn->session->config->debugmsg_callback;
+	else
+		func = _default_config->debugmsg_callback;
+
+	if (func) {
 		va_list args;
 
 		va_start(args, fmt);
-		config->debugmsg_callback(config->debugmsg_ctx, fmt, args);
+		func(conn, fmt, args);
 		va_end(args);
 	}
 }
 
+/*
 #define FETCH_AND_DUP(s) \
 	if (((*config)->s = va_arg(args, const char *))) {\
 		(*config)->s = strdup((*config)->s);\
 		if (!(*config)->s)\
 			return -2;\
 	}
-
 int vtls_config_init(vtls_config_t **config, ...)
 {
 	va_list args;
@@ -179,9 +183,6 @@ int vtls_config_init(vtls_config_t **config, ...)
 		case VTLS_CFG_VERIFY_STATUS:
 			(*config)->verifystatus = va_arg(args, int);
 			break;
-		case VTLS_CFG_CA_PATH:
-			FETCH_AND_DUP(CApath);
-			break;
 		case VTLS_CFG_CA_FILE:
 			FETCH_AND_DUP(CAfile);
 			break;
@@ -204,11 +205,11 @@ int vtls_config_init(vtls_config_t **config, ...)
 			(*config)->lock_callback = va_arg(args, void(*)(int));
 			break;
 		case VTLS_CFG_ERRORMSG_CALLBACK:
-			(*config)->errormsg_callback = va_arg(args, void(*)(void *, const char *, ...));
+			(*config)->errormsg_callback = va_arg(args, vtls_debug_callback_t);
 			(*config)->errormsg_ctx = va_arg(args, void *);
 			break;
 		case VTLS_CFG_DEBUGMSG_CALLBACK:
-			(*config)->debugmsg_callback = va_arg(args, void(*)(void *, const char *, ...));
+			(*config)->debugmsg_callback = va_arg(args, vtls_debug_callback_t);
 			(*config)->debugmsg_ctx = va_arg(args, void *);
 			break;
 		case VTLS_CFG_CONNECT_TIMEOUT:
@@ -221,7 +222,7 @@ int vtls_config_init(vtls_config_t **config, ...)
 			(*config)->write_timeout = va_arg(args, int);
 			break;
 		default:
-			/* unknown key */
+			// unknown key
 			if ((*config)->errormsg_callback)
 				error_printf(*config, "Unknown key %d\n", key);
 			else if (_default_config->errormsg_callback)
@@ -235,6 +236,7 @@ int vtls_config_init(vtls_config_t **config, ...)
 	return 0;
 }
 #undef FETCH_AND_DUP
+*/
 
 int vtls_config_matches(const vtls_config_t *data, const vtls_config_t *needle)
 {
@@ -242,7 +244,6 @@ int vtls_config_matches(const vtls_config_t *data, const vtls_config_t *needle)
 		(data->verifypeer == needle->verifypeer) &&
 		(data->verifyhost == needle->verifyhost) &&
 		(data->verifystatus == needle->verifystatus) &&
-		vtls_strcaseequal_ascii(data->CApath, needle->CApath) &&
 		vtls_strcaseequal_ascii(data->CAfile, needle->CAfile) &&
 		vtls_strcaseequal_ascii(data->CRLfile, needle->CRLfile) &&
 		vtls_strcaseequal_ascii(data->CERTfile, needle->CERTfile) &&
@@ -273,7 +274,6 @@ int vtls_config_clone(const vtls_config_t *src, vtls_config_t **dst)
 
 	/* and dup the strings */
 	DUP_MEMBER(CAfile);
-	DUP_MEMBER(CApath);
 	DUP_MEMBER(CRLfile);
 	DUP_MEMBER(issuercert);
 	DUP_MEMBER(random_file);
@@ -286,11 +286,10 @@ int vtls_config_clone(const vtls_config_t *src, vtls_config_t **dst)
 
 void vtls_config_deinit(vtls_config_t *config)
 {
-	if (!config || config == &_default_config_static)
+	if (!config)
 		return;
 
 	xfree(config->CAfile);
-	xfree(config->CApath);
 	xfree(config->CRLfile);
 	xfree(config->CERTfile);
 	xfree(config->KEYfile);
@@ -300,6 +299,21 @@ void vtls_config_deinit(vtls_config_t *config)
 	xfree(config->username);
 	xfree(config->password);
 	xfree(config);
+}
+
+vtls_debug_callback_t _debugmsg_callback;
+void vtls_glob_set_debug_callback(vtls_debug_callback_t func) {
+	_debugmsg_callback = func;
+}
+
+vtls_debug_callback_t _errormsg_callback;
+void vtls_glob_set_error_callback(vtls_error_callback_t func) {
+	_errormsg_callback = func;
+}
+
+vtls_lock_callback_t _lock_callback;
+void vtls_glob_set_lock_callback(vtls_lock_callback_t func) {
+	_lock_callback = func;
 }
 
 int vtls_get_engine(void)
@@ -316,29 +330,30 @@ static int _init_vtls = 0;
  * @retval 0 SSL initialized successfully
  * @retval 1 error initializing SSL
  */
-int vtls_init(vtls_config_t *config)
+int vtls_init(void)
 {
 	int ret = -1;
 
-	if (config && config->lock_callback)
-		config->lock_callback(1);
+	if (_lock_callback)
+		_lock_callback(1);
 
 	/* make sure this is only done once */
-	if (_init_vtls++)
-		return -1;
+	if (_init_vtls++ == 0) {
+		if ((ret = vtls_config_clone(&_default_config_static, &_default_config)) == 0) {
+			_default_config->errormsg_callback = _errormsg_callback;
+			_default_config->debugmsg_callback = _debugmsg_callback;
+			_default_config->lock_callback = _lock_callback;
 
-	if (config)
-		ret = vtls_config_clone(config, &_default_config);
-	else
-		ret = vtls_config_clone(&_default_config_static, &_default_config);
+			if ((ret = backend_init()) != 0) {
+				vtls_config_deinit(_default_config);
+				_default_config = NULL;
+				_init_vtls = 0;
+			}
+		}
+	}
 
-	if (ret)
-		_init_vtls = 0; /* oom situation in vtls_config_close, allow vtls_init() again later */
-	else
-		ret = backend_init(config);
-
-	if (config && config->lock_callback)
-		config->lock_callback(0);
+	if (_lock_callback)
+		_lock_callback(0);
 
 	return ret;
 }
@@ -346,15 +361,21 @@ int vtls_init(vtls_config_t *config)
 /* Global cleanup */
 void vtls_deinit(void)
 {
-	if (--_init_vtls == 0) {
-		/* only cleanup if we did a previous init */
+	if (_lock_callback)
+		_lock_callback(1);
+
+	if (_init_vtls && --_init_vtls == 0) {
+		/* only the last deinit() does the job */
 		backend_deinit();
 		vtls_config_deinit(_default_config);
 		_default_config = NULL;
 	}
+
+	if (_lock_callback)
+		_lock_callback(0);
 }
 
-int vtls_session_init(vtls_session_t **sess, vtls_config_t *config)
+int vtls_session_init(vtls_session_t **sess)
 {
 	int ret;
 
@@ -364,7 +385,7 @@ int vtls_session_init(vtls_session_t **sess, vtls_config_t *config)
 	if (!(*sess = calloc(1, sizeof(**sess))))
 		return -2;
 
-	(*sess)->config = config ? config : _default_config;
+	vtls_config_clone(_default_config, &(*sess)->config);
 
 	if ((ret = backend_session_init(*sess)))
 		vtls_session_deinit(*sess);
@@ -375,46 +396,138 @@ int vtls_session_init(vtls_session_t **sess, vtls_config_t *config)
 void vtls_session_deinit(vtls_session_t *sess)
 {
 	backend_session_deinit(sess);
-	xfree(sess->hostname);
+	vtls_config_deinit(sess->config);
 	xfree(sess);
 }
 
-int vtls_connect(vtls_session_t *sess, int sockfd, const char *hostname)
+int vtls_set_debug_callback(vtls_session_t *sess, vtls_debug_callback_t func, void *ctx)
 {
-	/* mark this is being ssl-enabled from here on. */
-	sess->use = 1;
-	sess->state = ssl_connection_negotiating;
-	sess->sockfd = sockfd;
-	sess->hostname = strdup(hostname);
-	sess->connect_start = curlx_tvnow();
+	if (!sess)
+		return -1;
 
-	return backend_connect(sess);
+	sess->config->debugmsg_callback = func;
+	sess->config->debugmsg_ctx = ctx;
+	return 0;
 }
 
-ssize_t vtls_write(vtls_session_t *sess, const char *buf, size_t count, int *curlcode)
+int vtls_set_error_callback(vtls_session_t *sess, vtls_error_callback_t func, void *ctx)
 {
-	sess->write_start = curlx_tvnow();
-	return backend_write(sess, buf, count, curlcode);
+	if (!sess)
+		return -1;
+
+	sess->config->errormsg_callback = func;
+	sess->config->errormsg_ctx = ctx;
+	return 0;
 }
 
-ssize_t vtls_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode)
+int vtls_set_lock_callback(vtls_session_t *sess, vtls_lock_callback_t func)
 {
-	sess->read_start = curlx_tvnow();
-	return backend_read(sess, buf, count, curlcode);
+	if (!sess)
+		return -1;
+
+	sess->config->lock_callback = func;
+	return 0;
 }
 
-void vtls_close(vtls_session_t *sess)
+int vtls_set_tls_version(vtls_session_t *sess, enum vtls_tls_version version)
 {
-	backend_close(sess);
+	if (sess) {
+		if (version >= VTLS_TLSVERSION_SSLv2 && version < VTLS_TLSVERSION_LAST) {
+			sess->config->version = version;
+			return 0;
+		}
+	}
+
+	return -1;
 }
 
-int vtls_shutdown(vtls_session_t *sess)
+int vtls_set_ca_file(vtls_session_t *sess, const char *ca_file)
 {
-	if (backend_shutdown(sess))
+	if (sess) {
+		if (sess->config)
+			xfree(sess->config->CAfile);
+
+		if ((sess->config->CAfile = strdup(ca_file)))
+			return 0;
+	}
+
+	return -1;
+}
+
+int vtls_conn_set_sni_hostname(vtls_connection_t *conn, const char *hostname)
+{
+	if (conn) {
+		if (conn->hostname)
+			xfree(conn->hostname);
+
+		if ((conn->hostname = strdup(hostname)))
+			return 0;
+	}
+
+	return -1;
+}
+
+int vtls_get_status_code(vtls_connection_t *conn)
+{
+	return conn ? conn->curlcode : -1;
+}
+
+int vtls_connection_init(vtls_connection_t **conn, vtls_session_t *sess, int sockfd)
+{
+	if (!conn)
+		return -1;
+
+	if (!(*conn = calloc(1, sizeof(**conn))))
+		return -2;
+
+	(*conn)->session = sess;
+	(*conn)->sockfd = sockfd;
+
+	/* default settings */
+	(*conn)->connect_timeout = 30*1000;
+	(*conn)->read_timeout = 10*1000;
+	(*conn)->write_timeout = 10*1000;
+	return 0;
+}
+
+void vtls_connection_deinit(vtls_connection_t *conn)
+{
+}
+
+int vtls_connect(vtls_connection_t *conn)
+{
+	/* mark this is being TLS-enabled from here on. */
+	conn->use = 1;
+	conn->state = ssl_connection_negotiating;
+	conn->connect_start = curlx_tvnow();
+
+	return backend_connect(conn);
+}
+
+ssize_t vtls_write(vtls_connection_t *conn, const char *buf, size_t count)
+{
+	conn->write_start = curlx_tvnow();
+	return backend_write(conn, buf, count);
+}
+
+ssize_t vtls_read(vtls_connection_t *conn, char *buf, size_t count)
+{
+	conn->read_start = curlx_tvnow();
+	return backend_read(conn, buf, count);
+}
+
+void vtls_close(vtls_connection_t *conn)
+{
+	backend_close(conn);
+}
+
+int vtls_shutdown(vtls_connection_t *conn)
+{
+	if (backend_shutdown(conn))
 		return CURLE_SSL_SHUTDOWN_FAILED;
 
-	sess->use = 0;
-	sess->state = ssl_connection_none;
+	conn->use = 0;
+	conn->state = ssl_connection_none;
 
 	return 0;
 }

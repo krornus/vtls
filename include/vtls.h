@@ -33,6 +33,8 @@
 //#include "schannel.h"       /* Schannel SSPI version */
 //#include "curl_darwinssl.h" /* SecureTransport (Darwin) version */
 
+#include <stdarg.h>
+
 #ifndef MAX_PINNED_PUBKEY_SIZE
 #define MAX_PINNED_PUBKEY_SIZE 1048576 /* 1MB */
 #endif
@@ -203,16 +205,14 @@ typedef enum {
 	CURL_LAST /* never use! */
 } CURLcode;
 
-enum {
-  CURL_SSLVERSION_DEFAULT,
-  CURL_SSLVERSION_TLSv1, /* TLS 1.x */
-  CURL_SSLVERSION_SSLv2,
-  CURL_SSLVERSION_SSLv3,
-  CURL_SSLVERSION_TLSv1_0,
-  CURL_SSLVERSION_TLSv1_1,
-  CURL_SSLVERSION_TLSv1_2,
-
-  CURL_SSLVERSION_LAST /* never use, keep last */
+enum vtls_tls_version {
+	VTLS_TLSVERSION_SSLv2,
+	VTLS_TLSVERSION_SSLv3,
+	VTLS_TLSVERSION_TLSv1, /* TLS 1.x */
+	VTLS_TLSVERSION_TLSv1_0,
+	VTLS_TLSVERSION_TLSv1_1,
+	VTLS_TLSVERSION_TLSv1_2,
+	VTLS_TLSVERSION_LAST /* just for range checking */
 };
 
 enum CURL_TLSAUTH {
@@ -226,7 +226,6 @@ enum {
 	VTLS_CFG_VERIFY_PEER,
 	VTLS_CFG_VERIFY_HOST,
 	VTLS_CFG_VERIFY_STATUS,
-	VTLS_CFG_CA_PATH,
 	VTLS_CFG_CA_FILE,
 	VTLS_CFG_CRL_FILE,
 	VTLS_CFG_ISSUER_FILE,
@@ -250,31 +249,55 @@ enum {
 typedef struct ssl_config_data *ssl_config_data_t;
 typedef struct _vtls_config_st vtls_config_t;
 typedef struct _vtls_session_st vtls_session_t;
+typedef struct _vtls_connection_st vtls_connection_t;
+typedef void (*vtls_debug_callback_t)(vtls_connection_t *, const char *, va_list); /* callback function for debug messages */
+typedef void (*vtls_error_callback_t)(vtls_connection_t *, const char *, va_list); /* callback function for error messages */
+typedef void (*vtls_lock_callback_t)(int); /* callback function for lock/unlock functionality */
 
-void  __attribute__ ((format (printf, 2, 3))) error_printf(vtls_config_t *config, const char *fmt, ...);
-void  __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_config_t *config, const char *fmt, ...);
+void  __attribute__ ((format (printf, 2, 3))) error_printf(vtls_connection_t *conn, const char *fmt, ...);
+void  __attribute__ ((format (printf, 2, 3))) debug_printf(vtls_connection_t *conn, const char *fmt, ...);
 
 int vtls_config_init(vtls_config_t **config, ...);
 int vtls_config_matches(const vtls_config_t *config1, const vtls_config_t *config2);
 int vtls_config_clone(const vtls_config_t *source, vtls_config_t **dest);
 void vtls_config_deinit(vtls_config_t *config);
 
-int vtls_init(vtls_config_t *config);
+/* global setting functions */
+void vtls_glob_set_debug_callback(vtls_debug_callback_t func);
+void vtls_glob_set_error_callback(vtls_error_callback_t func);
+void vtls_glob_set_lock_callback(vtls_lock_callback_t func);
+
+/* session setting functions */
+int vtls_set_debug_callback(vtls_session_t *sess, vtls_debug_callback_t func, void *ctx);
+int vtls_set_error_callback(vtls_session_t *sess, vtls_error_callback_t func, void *ctx);
+int vtls_set_lock_callback(vtls_session_t *sess, vtls_lock_callback_t func);
+int vtls_set_tls_version(vtls_session_t *sess, enum vtls_tls_version version);
+int vtls_set_ca_file(vtls_session_t *sess, const char *ca_file);
+
+/* connection setting functions */
+int vtls_conn_set_sni_hostname(vtls_connection_t *conn, const char *hostname);
+
+int vtls_get_status_code(vtls_connection_t *conn);
+
+int vtls_init(void);
 void vtls_deinit(void);
 
-int vtls_session_init(vtls_session_t **sess, vtls_config_t *config);
+int vtls_session_init(vtls_session_t **sess);
 void vtls_session_deinit(vtls_session_t *sess);
 int vtls_get_engine(void);
 size_t vtls_version(char *buffer, size_t size);
 
-ssize_t vtls_write(vtls_session_t *sess, const char *buf, size_t count, int *curlcode);
-ssize_t vtls_read(vtls_session_t *sess, char *buf, size_t count, int *curlcode);
-int vtls_connect(vtls_session_t *sess, int sockfd, const char *hostname);
-int vtls_connect_nonblocking(vtls_session_t *sess, int sockfd, int *done);
+int vtls_connection_init(vtls_connection_t **conn, vtls_session_t *sess, int sockfd);
+void vtls_connection_deinit(vtls_connection_t *conn);
+int vtls_connect(vtls_connection_t *conn);
+//int vtls_connect_nonblocking(vtls_connection_t *conn, int sockfd, int *done);
+ssize_t vtls_write(vtls_connection_t *conn, const char *buf, size_t count);
+ssize_t vtls_read(vtls_connection_t *conn, char *buf, size_t count);
+
 /* tell the SSL stuff to close down all open information regarding
 	connections (and thus session ID caching etc) */
-void vtls_close(vtls_session_t *sess);
-int vtls_shutdown(vtls_session_t *sess);
+void vtls_close(vtls_connection_t *conn);
+int vtls_shutdown(vtls_connection_t *conn);
 
 /* get N random bytes into the buffer, return 0 if a find random is filled	in */
 int vtls_md5sum(unsigned char *tmp, /* input */
