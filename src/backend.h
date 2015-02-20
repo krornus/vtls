@@ -60,6 +60,9 @@ struct _vtls_connection_st {
 	struct timeval connect_start;
 	struct timeval read_start;
 	struct timeval write_start;
+	char alpn[4][16]; /* just for testing HTTP/2.0 */
+	char alpn_selected[16]; /* just for testing HTTP/2.0 */
+	unsigned alpn_count;
 	int sockfd;
 	int use;
 	int state;

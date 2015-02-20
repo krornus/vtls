@@ -38,6 +38,10 @@
 
 #include "src/backend.h"
 
+/* ALPN protocol examples */
+#define HTTP2_0 "h2-14"
+#define HTTP1_1 "http/1.1"
+
 #define HTTP_REQUEST \
 "GET / HTTP/1.1\r\n"\
 "Host: www.google.com\r\n"\
@@ -74,7 +78,7 @@ int main(int argc, const char *const *argv)
 	vtls_connection_t *conn = NULL;
 	int rc, sockfd;
 	ssize_t nbytes;
-	char buf[2048];
+	char buf[2048], protocol[16];
 	const char *hostname = "www.google.com";
 
 	sockfd = _get_connected_socket(hostname, 443);
@@ -123,26 +127,35 @@ int main(int argc, const char *const *argv)
 
 	/* connection specific settings */
 	vtls_conn_set_sni_hostname(conn, hostname);
-	// vtls_set_max_timeout(conn, 60*1000); /* 60s timeout allowed in total */
-	// vtls_set_connect_timeout(conn, 30*1000); /* 30s timeout */
-	// vtls_set_read_timeout(conn, 10*1000); /* 10s timeout */
-	// vtls_set_write_timeout(conn, 10*1000); /* 10s timeout */
+
+	if ((rc = vtls_conn_set_protocol(conn, HTTP2_0)))
+		_error_printf(conn, "Failed to set ALPN for HTTP/2.0 (%d)\n", rc);
+
+	if ((rc = vtls_conn_set_protocol(conn, HTTP1_1)))
+		_error_printf(conn, "Failed to set ALPN for HTTP/1.1 (%d)\n", rc);
 
 	if ((rc = vtls_connect(conn))) {
 		_error_printf(conn, "Failed to connect (%d)\n", rc);
 		return 1;
 	}
-	_debug_printf(conn, "connection established\n");
 
-	/* for a nonblocking write set */
-	if ((nbytes = vtls_write(conn, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1)) < 0) {
-		_error_printf(conn, "Failed to write (%d)\n", vtls_get_status_code(conn));
-		return 1;
-	}
-	_debug_printf(conn, "data written (%zd bytes)\n", nbytes);
+	if ((rc = vtls_conn_get_protocol(conn, protocol, sizeof(protocol))))
+		_error_printf(conn, "Failed to agree upon application protocol - fallback to HTTP/1.1\n");
+	else
+		_error_printf(conn, "Application protocol: %s\n", protocol);
 
-	while ((nbytes = vtls_read(conn, buf, sizeof(buf))) >= 0) {
-		fwrite(buf, 1, nbytes, stdout);
+	if (!strcmp(protocol, HTTP2_0)) {
+		_error_printf(conn, "Application protocol '%s' not supported\n", HTTP2_0);
+	} else {
+		/* for a nonblocking write set */
+		if ((nbytes = vtls_write(conn, HTTP_REQUEST, sizeof(HTTP_REQUEST) - 1)) < 0) {
+			_error_printf(conn, "Failed to write (%d)\n", vtls_get_status_code(conn));
+			return 1;
+		}
+
+		while ((nbytes = vtls_read(conn, buf, sizeof(buf))) >= 0) {
+			fwrite(buf, 1, nbytes, stdout);
+		}
 	}
 
 	vtls_close(conn);

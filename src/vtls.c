@@ -50,6 +50,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdarg.h>
@@ -467,6 +468,31 @@ int vtls_conn_set_sni_hostname(vtls_connection_t *conn, const char *hostname)
 	return -1;
 }
 
+int vtls_conn_set_protocol(vtls_connection_t *conn, const char *protocol)
+{
+	if (!conn || !protocol)
+		return -1;
+
+	if (conn->alpn_count >= sizeof(conn->alpn)/sizeof(conn->alpn[0]))
+		return -1;
+
+	snprintf(conn->alpn[conn->alpn_count++], sizeof(conn->alpn[0]), "%s", protocol);
+	return 0;
+}
+
+int vtls_conn_get_protocol(vtls_connection_t *conn, char *protocol, size_t protocol_size)
+{
+	if (!conn || !protocol || !protocol_size)
+		return -1;
+
+	snprintf(protocol, protocol_size, "%s", conn->alpn_selected);
+
+	if (!*protocol)
+		return -1;
+
+	return 0;
+}
+
 int vtls_get_status_code(vtls_connection_t *conn)
 {
 	return conn ? conn->curlcode : -1;
@@ -504,13 +530,13 @@ int vtls_connect(vtls_connection_t *conn)
 	return backend_connect(conn);
 }
 
-ssize_t vtls_write(vtls_connection_t *conn, const char *buf, size_t count)
+ssize_t vtls_write(vtls_connection_t *conn, const void *buf, size_t count)
 {
 	conn->write_start = curlx_tvnow();
 	return backend_write(conn, buf, count);
 }
 
-ssize_t vtls_read(vtls_connection_t *conn, char *buf, size_t count)
+ssize_t vtls_read(vtls_connection_t *conn, void *buf, size_t count)
 {
 	conn->read_start = curlx_tvnow();
 	return backend_read(conn, buf, count);

@@ -276,6 +276,8 @@ int vtls_set_ca_file(vtls_session_t *sess, const char *ca_file);
 
 /* connection setting functions */
 int vtls_conn_set_sni_hostname(vtls_connection_t *conn, const char *hostname);
+int vtls_conn_set_protocol(vtls_connection_t *conn, const char *protocol);
+int vtls_conn_get_protocol(vtls_connection_t *conn, char *protocol, size_t protocol_size);
 
 int vtls_get_status_code(vtls_connection_t *conn);
 
@@ -291,8 +293,8 @@ int vtls_connection_init(vtls_connection_t **conn, vtls_session_t *sess, int soc
 void vtls_connection_deinit(vtls_connection_t *conn);
 int vtls_connect(vtls_connection_t *conn);
 //int vtls_connect_nonblocking(vtls_connection_t *conn, int sockfd, int *done);
-ssize_t vtls_write(vtls_connection_t *conn, const char *buf, size_t count);
-ssize_t vtls_read(vtls_connection_t *conn, char *buf, size_t count);
+ssize_t vtls_write(vtls_connection_t *conn, const void *buf, size_t count);
+ssize_t vtls_read(vtls_connection_t *conn, void *buf, size_t count);
 
 /* tell the SSL stuff to close down all open information regarding
 	connections (and thus session ID caching etc) */

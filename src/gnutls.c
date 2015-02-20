@@ -389,10 +389,6 @@ gtls_connect_step1(vtls_connection_t *conn)
 	const char *prioritylist;
 	const char *err = NULL;
 #endif
-#ifdef HAS_ALPN
-	int protocols_size = 2;
-	gnutls_datum_t protocols[2];
-#endif
 
 	if (conn->state == ssl_connection_complete)
 		/* to make us tolerant against being called more than once for the
@@ -637,22 +633,18 @@ gtls_connect_step1(vtls_connection_t *conn)
 	}
 #endif
 
-#ifdef HAS_ALPN
-	if (data->set.httpversion == CURL_HTTP_VERSION_2_0) {
-		if (data->set.ssl_enable_alpn) {
-			protocols[0].data = NGHTTP2_PROTO_VERSION_ID;
-			protocols[0].size = NGHTTP2_PROTO_VERSION_ID_LEN;
-			protocols[1].data = ALPN_HTTP_1_1;
-			protocols[1].size = ALPN_HTTP_1_1_LENGTH;
-			gnutls_alpn_set_protocols(backend->session, protocols, protocols_size, 0);
-			debug_printf(conn, "ALPN, offering %s, %s\n", NGHTTP2_PROTO_VERSION_ID,
-				ALPN_HTTP_1_1);
-			connssl->asked_for_h2 = 1;
-		} else {
-			debug_printf(conn, "SSL, can't negotiate HTTP/2.0 without ALPN\n");
+	if (conn->alpn_count) {
+		gnutls_datum_t data[conn->alpn_count];
+		unsigned it;
+
+		for (it = 0; it < conn->alpn_count; it++) {
+			data[it].data = (unsigned char *)conn->alpn[it];
+			data[it].size = strlen(conn->alpn[it]);
+			debug_printf(conn, "ALPN offering %s\n", conn->alpn[it]);
 		}
+
+		gnutls_alpn_set_protocols(backend->session, data, conn->alpn_count, 0);
 	}
-#endif
 
 	if (sess->config->CERTfile) {
 		if (gnutls_certificate_set_x509_key_file(backend->cred,
@@ -1058,26 +1050,15 @@ static int gtls_connect_step3(vtls_connection_t *conn)
 	ptr = gnutls_mac_get_name(gnutls_mac_get(backend->session));
 	debug_printf(conn, "\t MAC: %s\n", ptr);
 
-#ifdef HAS_ALPN
-	if (data->set.ssl_enable_alpn) {
-		rc = gnutls_alpn_get_selected_protocol(session, &proto);
-		if (rc == 0) {
-			debug_printf(conn, "ALPN, server accepted to use %.*s\n", proto.size,
-				proto.data);
+	if (*conn->alpn) {
+		gnutls_datum_t proto;
 
-			if (proto.size == NGHTTP2_PROTO_VERSION_ID_LEN &&
-				memcmp(NGHTTP2_PROTO_VERSION_ID, proto.data,
-				NGHTTP2_PROTO_VERSION_ID_LEN) == 0) {
-				conn->negnpn = NPN_HTTP2;
-			} else if (proto.size == ALPN_HTTP_1_1_LENGTH && memcmp(ALPN_HTTP_1_1,
-				proto.data, ALPN_HTTP_1_1_LENGTH) == 0) {
-				conn->negnpn = NPN_HTTP1_1;
-			}
-		} else if (connssl->asked_for_h2) {
-			error_printf(conn, "ALPN, server did not agree to a protocol\n");
-		}
+		if ((rc = gnutls_alpn_get_selected_protocol(backend->session, &proto)) == 0) {
+			snprintf(conn->alpn_selected, sizeof(conn->alpn_selected), "%.*s", proto.size, proto.data);
+			debug_printf(conn, "ALPN protocol selected: %s\n", conn->alpn_selected);
+		} else
+			error_printf(conn, "No ALPN protocol selected by server\n");
 	}
-#endif
 
 	conn->state = ssl_connection_complete;
 //	conn->recv[sockindex] = gtls_recv;
